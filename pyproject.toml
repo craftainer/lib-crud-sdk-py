@@ -1,0 +1,94 @@
+# Project metadata, dependencies, and every linter/type-checker/test-runner
+# config live here, in one file.
+[project]
+name = "template-python-package"
+# Single source of the version. Stays 0.0.0 in git: release.yml's tag is the
+# real version, stamped into the build at release time without a commit.
+version = "0.0.0"
+description = "Template repository for publishable Python packages"
+license = "GPL-3.0-or-later"
+readme = "README.md"
+requires-python = ">=3.14"
+dependencies = []
+
+[dependency-groups]
+# Installed by a plain `uv sync` (uv's default group).
+dev = [
+    "ruff==0.16.8",
+    "mypy==2.3.1",
+    "pytest==9.1.1",
+    "pytest-cov==7.1.0",
+    "pytest-benchmark==5.3.0",
+    "pytest-codspeed==5.0.3",
+    "import-linter==2.15",
+    "pip-audit==2.10.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/template_python_package"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py314"
+# Kept outside the bind-mounted /workspace: a cache dir inside the mount gets
+# scanned file-by-file by host antivirus tools on Windows and is slow to write.
+cache-dir = "/home/vscode/.cache/ruff"
+
+[tool.ruff.lint]
+# Curated strict set: correctness + style + security (S) + pylint (PL) +
+# mandatory type annotations (ANN) + docstrings on public members (D1xx).
+# COM812/ISC001 conflict with the ruff formatter (ruff's own recommendation).
+select = [
+    "E", "W", "F", "I", "UP", "B", "C4", "N", "S", "A", "SIM", "RUF", "PL", "ANN",
+    "D100", "D101", "D102", "D103", "D104", "D105", "D106", "D107",
+]
+ignore = ["COM812", "ISC001"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["template_python_package"]
+
+[tool.ruff.lint.per-file-ignores]
+# assert is the point of a test; comparing to literal values is not a magic number.
+"tests/**" = ["S101", "PLR2004"]
+
+[tool.importlinter]
+root_packages = ["template_python_package"]
+
+# The example package has two layers: `api` (the public surface) sits above
+# `core` (pure logic). A layer may import a layer listed after it, never one
+# listed before it, so core can never grow a dependency on api. Add layers to
+# this list as the package grows; the hook then keeps the dependency direction
+# honest.
+[[tool.importlinter.contracts]]
+name = "template_python_package layers"
+type = "layers"
+containers = ["template_python_package"]
+layers = ["api", "core"]
+
+[tool.mypy]
+python_version = "3.14"
+mypy_path = "src"
+strict = true
+warn_unreachable = true
+cache_dir = "/home/vscode/.cache/mypy"
+
+[tool.pytest.ini_options]
+cache_dir = "/home/vscode/.cache/pytest"
+# tests/bench is run explicitly: `uv run pytest tests/bench --no-cov`.
+addopts = "--strict-markers --strict-config -ra --ignore=tests/bench --cov=template_python_package --cov-report=term-missing"
+testpaths = ["tests/unit"]
+filterwarnings = ["error"]
+
+[tool.coverage.run]
+source = ["template_python_package"]
+branch = true
+relative_files = true
+data_file = "/home/vscode/.cache/coverage/.coverage"
+
+[tool.coverage.report]
+fail_under = 100
+show_missing = true

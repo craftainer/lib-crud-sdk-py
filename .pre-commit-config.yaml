@@ -1,0 +1,131 @@
+# Run with prek (https://prek.j178.dev/, a Rust, drop-in-compatible
+# reimplementation of pre-commit — see CLAUDE.md for why) or with the
+# classic `pre-commit` CLI; both read this exact file.
+#
+# Fast, basic checks run on every commit. Every hook also carries the
+# "manual" stage, so `prek run --hook-stage manual --all-files` runs
+# everything at once regardless of which git hook would normally trigger
+# it. An instance layers its own language-specific hooks (ruff/mypy/
+# pytest, cargo fmt/clippy, golangci-lint, eslint/tsc, tflint, ...) onto
+# this file's `repos:` list — see docs/TEMPLATE.md's "Checks" section.
+default_install_hook_types:
+  - pre-commit
+  - pre-push
+  - commit-msg
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: trailing-whitespace
+        stages: [pre-commit, manual]
+      - id: end-of-file-fixer
+        stages: [pre-commit, manual]
+      - id: check-yaml
+        stages: [pre-commit, manual]
+      - id: check-toml
+        stages: [pre-commit, manual]
+      - id: check-json
+        stages: [pre-commit, manual]
+      - id: check-added-large-files
+        stages: [pre-commit, manual]
+      - id: check-merge-conflict
+        stages: [pre-commit, manual]
+      - id: mixed-line-ending
+        stages: [pre-commit, manual]
+      - id: debug-statements
+        stages: [pre-commit, manual]
+      - id: detect-private-key
+        stages: [pre-commit, manual]
+
+  - repo: https://github.com/compilerla/conventional-pre-commit
+    rev: v4.4.0
+    hooks:
+      # No "manual" stage here, unlike every other hook in this file: this
+      # one needs the actual commit-message file git passes at the
+      # commit-msg stage, which "prek run --all-files --hook-stage manual"
+      # has no equivalent for.
+      - id: conventional-pre-commit
+        stages: [commit-msg]
+
+  # ruff, mypy, pytest and uv itself are project dev-dependencies (see
+  # pyproject.toml) -- running them via `uv run` keeps their pinned versions as
+  # the single source of truth instead of a second pin per tool in this file.
+  - repo: local
+    hooks:
+      - id: ruff-check
+        name: ruff check
+        entry: uv run ruff check --force-exclude --fix --exit-non-zero-on-fix
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+        stages: [pre-commit, manual]
+
+      - id: ruff-format
+        name: ruff format
+        entry: uv run ruff format --force-exclude
+        language: system
+        types_or: [python, pyi]
+        require_serial: true
+        stages: [pre-commit, manual]
+
+      - id: mypy
+        name: mypy --strict
+        entry: uv run mypy src tests
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: import-linter
+        name: import-linter (package layers)
+        # --cache-dir: no pyproject.toml setting exists for this, only a CLI
+        # flag; kept outside the bind-mounted /workspace like ruff's/mypy's.
+        entry: uv run lint-imports --cache-dir /home/vscode/.cache/import_linter
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: pytest
+        name: pytest (100% coverage gate)
+        entry: uv run pytest
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: uv-lock-check
+        name: uv lock --check
+        entry: uv lock --check
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+      - id: pip-audit
+        name: pip-audit (dependency vulnerabilities)
+        # --local: audit exactly what uv.lock resolves into this environment.
+        entry: uv run pip-audit --local
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-push, manual]
+
+  - repo: local
+    hooks:
+      - id: template-sync-manifest
+        name: template-sync-manifest (every tracked path classified)
+        entry: python3 .github/scripts/template_sync_manifest.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit, manual]
+
+      - id: devcontainer-lock
+        name: devcontainer-lock (lockfile matches devcontainer.json features)
+        entry: python3 .github/scripts/check_devcontainer_lock.py
+        language: system
+        files: ^\.devcontainer/devcontainer(-lock)?\.json$
+        pass_filenames: false
+        stages: [pre-commit, manual]

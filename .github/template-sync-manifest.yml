@@ -1,0 +1,164 @@
+# Classifies every path tracked in this repo into exactly one template-sync
+# tier, read by ../workflows/template-sync.yml from the template's tagged ref
+# being synced *to* (never from an instance's own copy) -- see
+# ../workflows/README.md's "Template sync" section for the tier semantics and
+# ../scripts/README.md for the checker that keeps this file exhaustive.
+#
+# A path matching a "replace" pattern that an instance has locally deleted or
+# renamed is recreated on the next sync -- that's inherent to "replace" (byte-
+# for-byte, unconditional), not a bug to work around here; an instance that
+# wants a template-owned path gone for good should move its pattern to
+# "ignore" in a template release rather than deleting the file locally.
+#
+# This started as template-base's own manifest and is itself "merge" tier:
+# template-python-package is both an instance of template-base and its own
+# template for further instances, so it edits this file directly, covering its own (larger)
+# tracked-file set, and resolves base's additions by hand -- see that repo's
+# docs/TEMPLATE.md.
+#
+# An instance that isn't itself a template doesn't edit this file; it lists
+# its own files (e.g. src/) in ../template-sync-manifest.local.yml instead --
+# same format, "ignore" tier only, read by the completeness check but never
+# by sync.
+#
+# Patterns: a trailing "/" matches the directory and everything under it; "*"
+# matches any run of characters (including "/"); anything else is an exact
+# path. Every pattern here is anchored at the repo root.
+
+replace:
+  # Base-owned files an instance extends through a hook (see
+  # docs/TEMPLATE.md's "Instance extension points") rather than by editing
+  # them, so a sync can overwrite them safely.
+  - .claude/hooks/self-check.sh
+  - .claude/skills/
+  - .claude/agents/
+  - .devcontainer/compose.yml
+  - .devcontainer/devcontainer-lock.json
+  - .devcontainer/resolve-ssh-agent.sh
+  - .vscode/extensions.json
+  - .vscode/settings.json
+  # Listed one by one, not as a glob: .github/workflows/README.md is merge.
+  - .github/workflows/checks.yml
+  - .github/workflows/moderate-bug-fix-apply.yml
+  - .github/workflows/moderate-bug-fix.yml
+  - .github/workflows/moderate-bug-triage.yml
+  - .github/workflows/moderate-cleanup.yml
+  - .github/workflows/moderate-feature-build-apply.yml
+  - .github/workflows/moderate-feature-build.yml
+  - .github/workflows/moderate-feature-triage.yml
+  - .github/workflows/moderate-setup.yml
+  - .github/workflows/release.yml
+  - .github/workflows/template-sync.yml
+  - .github/scripts/
+  - .github/ISSUE_TEMPLATE/
+  - .github/PULL_REQUEST_TEMPLATE.md
+
+  # Build/dependency/hook plumbing, all instance-agnostic.
+  - .devcontainer/Dockerfile
+  - .devcontainer/Dockerfile.dockerignore
+  - .gitattributes
+  - scripts/develop.sh
+  - scripts/post-create.sh
+  - scripts/develop.d/README.md
+  - scripts/post-create.d/README.md
+
+  # template-python-package's own layer on top of base: the CodSpeed
+  # benchmark workflow, the release-check script the Makefile's release
+  # contract calls, and the post-create hook that syncs the uv environment.
+  # All instance-agnostic, so fixes reach every package through a sync.
+  # Hook scripts are listed one by one, not as base's `*.sh` globs: an
+  # instance's own extra hook scripts go in its
+  # template-sync-manifest.local.yml.
+  - .github/workflows/codspeed.yml
+  - scripts/release-check.sh
+  - scripts/post-create.d/10-uv-sync.sh
+  # Same precedent as template-fastapi: the Makefile implements the release
+  # contract identically for every package (the build, SBOM and PyPI publish
+  # steps carry no per-package content, which comes from pyproject.toml), so
+  # it's template-owned.
+  - Makefile
+  - .secrets/README.md
+  - .secrets/.gitkeep
+
+  # The AI-assisted workflow, and every directory README/template documenting
+  # this repo's own conventions rather than product knowledge.
+  - CLAUDE.md
+  - docs/README.md
+  - docs/adrs/README.md
+  - docs/adrs/template.md
+  - docs/frs/README.md
+  - docs/frs/template.md
+  - docs/nfrs/README.md
+  - docs/nfrs/template.md
+  - docs/plans/README.md
+  - docs/plans/template.md
+
+ignore:
+  # Each instance chooses its own license and copyright holder.
+  - LICENSE
+
+  # The package scaffold: an instance renames the distribution and the import
+  # package (see README.md), owns its dependencies, code, tests, benchmarks
+  # and import-linter contract, so none of it can be synced.
+  - pyproject.toml
+  - src/
+  - tests/
+
+  # Derived from pyproject.toml; a 3-way merge of a lock file is unreliable,
+  # and the dependency set is the instance's own, so an instance regenerates
+  # it with `uv lock`.
+  - uv.lock
+
+  # Product/domain knowledge and working plans: instance-owned from the
+  # moment it's instantiated.
+  - docs/architecture.md
+  - docs/system-design.md
+  - docs/glossary.md
+  - docs/stakeholders.md
+  - docs/adrs/[0-9]*.md
+  - docs/frs/FR-*.md
+  - docs/nfrs/NFR-*.md
+  - docs/plans/[0-9]*.md
+
+  # Instance-owned bookkeeping, written only by the sync workflow itself.
+  - .github/template-sync-state.json
+
+  # Instance hook files (see docs/TEMPLATE.md's "Instance extension
+  # points"): an instance's own compose fragment (where e.g. a Postgres
+  # service for integration tests goes) and the scripts it drops into
+  # develop.d/. post-create.d/ has no glob here: see the replace tier.
+  - .devcontainer/compose.instance.yml
+  - scripts/develop.d/*.sh
+
+  # An instance's own extra "ignore" patterns for paths this manifest can't
+  # know about (see docs/TEMPLATE.md's "Template sync" section).
+  - .github/template-sync-manifest.local.yml
+
+merge:
+  # Project identity (name/description) is interpolated per instance.
+  - README.md
+
+  # Files with no include mechanism of their own (JSON configs, prek's
+  # .pre-commit-config.yaml), and docs an instance appends to: a three-way
+  # merge keeps the instance's additions.
+  - .claude/settings.json
+  - .claude/README.md
+  - .devcontainer/devcontainer.json
+  - .devcontainer/README.md
+  - .vscode/tasks.json
+  - .vscode/README.md
+  - .github/workflows/README.md
+  - .github/CONTENTS.md
+  - .github/renovate.json
+  - .pre-commit-config.yaml
+  - .mcp.json
+  - .gitignore
+  - scripts/README.md
+  - docs/TEMPLATE.md
+
+  # The critical one: as "replace", the first sync would overwrite a
+  # downstream template's own manifest, which classifies *its* tree for
+  # *its* instances. Ordinary instances never edit this file (they use the
+  # local manifest), so a merge applies cleanly for them and keeps their
+  # completeness check current with new base files.
+  - .github/template-sync-manifest.yml
