@@ -1,6 +1,7 @@
 """The synchronous cache hook against the shared scenarios."""
 
 import httpx2
+import pytest
 
 from craftainer_crud_sdk.cache import CacheLayer, CachePolicy, MemoryStore, build_key
 from craftainer_crud_sdk.interfaces import CacheEntry, Op
@@ -375,7 +376,7 @@ def test_every_successful_write_clears_the_whole_resource(
     for version in ("v1", "v2"):
         runner.send(make_request("list", api_version=version))
         runner.send(make_request("record", record_id=1, query="id=1", api_version=version))
-    runner.send(make_request("list", resource="villains"))
+    seed(store, "v1/villains/_/list/_/anon/")
     assert len(store) == 5
     server.status = status
     runner.send(make_request(op, method=method, record_id=record_id, api_version="v1"))
@@ -402,7 +403,7 @@ def test_events_and_reconnect_clear_the_resource_across_versions() -> None:
             for op in ("list", "filters"):
                 runner.send(make_request(op, api_version=version))
             runner.send(make_request("record", record_id=1, query="id=1", api_version=version))
-        runner.send(make_request("list", resource="villains"))
+        seed(store, "v1/villains/_/list/_/anon/")
 
     for action, rid in (("create", 1), ("update", 1), ("delete", 1), ("restore", 1), ("x", None)):
         fill()
@@ -457,7 +458,9 @@ def test_a_response_in_flight_during_an_invalidation_is_stored_revalidate_only()
     assert len(server.calls) == 3
 
 
-def test_an_invalidation_during_the_store_drops_the_new_entry() -> None:
+def test_an_invalidation_during_the_store_drops_the_new_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """An invalidation landing between the check and the store removes what was just stored."""
     runner, _, store, layer, _ = setup(CachePolicy(max_age=60), events=True)
     request = make_request("list")
@@ -465,12 +468,12 @@ def test_an_invalidation_during_the_store_drops_the_new_entry() -> None:
     response = runner.transport.handle_request(request)
     real_set = store.set
 
-    def set_then_invalidate(key: str, entry: CacheEntry, ttl: float) -> None:
+    def set_then_invalidate(key: str, entry: CacheEntry, ttl: float | None = None) -> None:
         """Store, then an event lands before the layer re-checks."""
         real_set(key, entry, ttl)
         layer.invalidate_event("heroes", "update", 1)
 
-    store.set = set_then_invalidate  # type: ignore[method-assign]
+    monkeypatch.setattr(store, "set", set_then_invalidate)
     layer.on_response(request, response)
     assert len(store) == 0
 

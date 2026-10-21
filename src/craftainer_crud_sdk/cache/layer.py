@@ -136,7 +136,7 @@ class _Core:
         """Before applying ``ops``: bump if a write clears; return the generation expected after."""
         if state.kind is None and any(isinstance(op, _Clear) for op in ops):
             return self.bump(state.ctx["resource"])
-        return state.generation
+        return self.generation(state.ctx["resource"])  # `plan` already priced this one in
 
     def late_deletes(self, state: _State, ops: list[_Op], expected: int) -> list[_Op]:
         """Deletes for the entries just stored if an invalidation landed while storing them."""
@@ -162,7 +162,7 @@ class _Core:
         if ctx is None:
             return None
         resource = ctx["resource"]
-        version = str(ctx.get("api_version") or UNVERSIONED)
+        version = ctx["api_version"] or UNVERSIONED
         generation = self.generation(resource)
         if request.method != "GET":
             policy = self.policies.get(resource) if resource else None

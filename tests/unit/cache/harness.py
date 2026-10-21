@@ -1,7 +1,7 @@
 """A tiny hook runner and fake server for driving the cache hooks without the client."""
 
 from collections.abc import Awaitable, Callable
-from typing import Any, cast
+from typing import Any
 
 import httpx2
 
@@ -44,15 +44,14 @@ def make_request(  # noqa: PLR0913  # a request is described by this many indepe
     url = "http://t/api/heroes" + (f"?{query}" if query else "")
     extensions: dict[str, Any] = {}
     if context:
-        ctx: dict[str, Any] = {
+        ctx: RequestContext = {
             "resource": resource,
             "op": op,
             "record_id": record_id,
+            "api_version": api_version,
             "scope": scope,
         }
-        if api_version is not None:  # `RequestContext.api_version`; absent means None
-            ctx["api_version"] = api_version
-        extensions[EXTENSION_KEY] = cast("RequestContext", ctx)
+        extensions[EXTENSION_KEY] = ctx
     return httpx2.Request(method, url, headers=headers, extensions=extensions)
 
 

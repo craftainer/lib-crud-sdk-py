@@ -342,11 +342,11 @@ def test_invalidate_on_events_sync_wiring() -> None:
             break
         deadline.wait(0.05)
     assert layer.events_active("heroes")
-    # update(5) cleared list+record 5; the reconnect cleared record 6 too; filters stay
+    # an event clears the whole resource (every API version), so the reconnect finds nothing
     assert store.get(build_key("heroes", "list", None, "anon")) is None
     assert store.get(build_key("heroes", "record", 5, "anon")) is None
     assert store.get(build_key("heroes", "record", 6, "anon")) is None
-    assert store.get(build_key("heroes", "filters", None, "anon")) is not None
+    assert store.get(build_key("heroes", "filters", None, "anon")) is None  # whole resource
     unsubscribe()
     assert not layer.events_active("heroes")
     release.set()
@@ -395,7 +395,7 @@ async def test_async_subscriber_and_wiring(monkeypatch: pytest.MonkeyPatch) -> N
     assert script.requests[1].url.params["subscriber_id"] == "sub-1"
     assert script.requests[2].url.params["subscriber_id"] == "sub-1"
     assert store.get(build_key("heroes", "record", 6, "anon")) is None
-    assert store.get(build_key("heroes", "filters", None, "anon")) is not None
+    assert store.get(build_key("heroes", "filters", None, "anon")) is None  # whole resource
     assert sleeps[:2] == [0.5, 1.0]
     unsubscribe()
     unsubscribe()
@@ -494,4 +494,135 @@ async def test_async_refcount_keeps_stream_until_last_listener_leaves() -> None:
     second()
     await sub.aclose()
     assert task_of(sub) is None
+    await client.aclose()
+
+
+def test_a_non_http_error_closes_the_gate_and_a_new_subscribe_restarts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The loop dying of a bug still tells listeners; subscribing again starts a new stream."""
+    release = threading.Event()
+    layer = CacheLayer(MemoryStore(), {"heroes": CachePolicy()})
+    script = Script(
+        sse([hello()], RuntimeError("decoder bug")),
+        open_stream(Gate(release, "s2")),
+    )
+    sub = sync_subscriber(script)
+    with caplog.at_level(logging.ERROR):
+        unsubscribe = invalidate_on_events(layer, sub, "heroes")
+        thread = sub._thread
+        assert thread is not None
+        thread.join(5)
+    assert not thread.is_alive()
+    assert "event stream /api/heroes/events died" in caplog.text
+    assert not layer.events_active("heroes")  # on_status(False) fired on the way out
+    assert sub._thread is None
+    assert not sub._connected
+    restarted = threading.Event()
+
+    def on_status(up: bool) -> None:
+        """Signal the restart."""
+        if up:
+            restarted.set()
+
+    sub.subscribe(lambda e: None, on_status=on_status)
+    assert restarted.wait(5)
+    assert len(script.requests) == 2
+    unsubscribe()
+    release.set()
+    sub.close()
+
+
+class Blocking(httpx2.SyncByteStream):
+    """Sends the handshake, then blocks until the response is closed (like a socket read)."""
+
+    def __init__(self) -> None:
+        """Create it."""
+        self.closed = threading.Event()
+
+    def __iter__(self) -> Iterator[bytes]:
+        """Protocol method."""
+        yield hello()
+        self.closed.wait(10)
+        raise httpx2.ReadError("closed under the reader")
+
+    def close(self) -> None:
+        """Protocol method."""
+        self.closed.set()
+
+
+def _started(sub: EventSubscriber) -> threading.Thread:
+    up = threading.Event()
+    sub.subscribe(lambda e: None, on_status=lambda ok: up.set() if ok else None)
+    assert up.wait(5)
+    thread = sub._thread
+    assert thread is not None
+    return thread
+
+
+def test_close_unblocks_the_reader_and_joins_the_thread() -> None:
+    """Close closes the live response, so the reader does not wait for a frame."""
+    body = Blocking()
+    sub = sync_subscriber(Script(open_stream(body)))
+    thread = _started(sub)
+    sub.close(timeout=3)
+    assert body.closed.is_set()
+    assert not thread.is_alive()
+    assert sub._thread is None
+
+
+def test_the_last_unsubscribe_unblocks_the_reader() -> None:
+    """Unsubscribing the last listener also closes the stream."""
+    body = Blocking()
+    sub = sync_subscriber(Script(open_stream(body)))
+    up = threading.Event()
+    unsubscribe = sub.subscribe(lambda e: None, on_status=lambda ok: up.set() if ok else None)
+    assert up.wait(5)
+    thread = sub._thread
+    assert thread is not None
+    unsubscribe()
+    thread.join(3)
+    assert body.closed.is_set()
+    assert not thread.is_alive()
+
+
+def test_close_warns_when_the_thread_does_not_stop(caplog: pytest.LogCaptureFixture) -> None:
+    """A reader that ignores the close is reported, not silently abandoned."""
+    release = threading.Event()
+    sub = sync_subscriber(Script(open_stream(Gate(release))))
+    thread = _started(sub)
+    with caplog.at_level(logging.WARNING):
+        sub.close(timeout=0.05)
+    assert "did not stop" in caplog.text
+    release.set()
+    thread.join(5)
+
+
+@pytest.mark.asyncio
+async def test_async_non_http_error_closes_the_gate_and_resubscribe_restarts(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """An async loop dying of a bug still sends on_status(False); subscribing again restarts."""
+    layer = AsyncCacheLayer(AsyncMemoryStore(MemoryStore()), {"heroes": CachePolicy()})
+    script = Script(sse([hello()], RuntimeError("decoder bug")), open_stream(AsyncGate("s2")))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS)
+    with caplog.at_level(logging.ERROR):
+        unsubscribe = invalidate_on_events(layer, sub, "heroes")
+        task = task_of(sub)
+        assert task is not None
+        await asyncio.gather(task, return_exceptions=True)
+    assert "died" in caplog.text
+    assert not layer.events_active("heroes")
+    assert task_of(sub) is None
+    unsubscribe()
+    invalidate_on_events(layer, sub, "heroes")
+    for _ in range(500):
+        if layer.events_active("heroes"):
+            break
+        await asyncio.sleep(0.001)
+    assert layer.events_active("heroes")
+    assert len(script.requests) == 2
+    await sub.aclose()
+    assert not layer.events_active("heroes")
     await client.aclose()
