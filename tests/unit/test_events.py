@@ -168,9 +168,10 @@ def test_handshake_events_filter_keepalive_and_resume() -> None:
         ),
         sse([hello("sub-2"), event("delete", 7)]),
     )
-    seen, sub = run_sync(script, stop_after=8)
+    seen, sub = run_sync(script, stop_after=9)
     kinds = [label(s) for s in seen]
     assert kinds == [
+        "reset",  # the first handshake clears too: a persistent store may predate the process
         ("up", True),
         ("create", 6),
         "reset",
@@ -445,8 +446,9 @@ async def test_async_listener_errors_and_late_subscriber(
 def test_run_stops_at_once_when_already_stopped_and_mid_stream() -> None:
     """Run stops at once when already stopped and mid stream."""
     script = Script(sse([hello(), event("create", 1), event("create", 2)]))
-    seen, _ = run_sync(script, stop_after=2)  # up, then the first event stops the loop
+    seen, _ = run_sync(script, stop_after=3)  # reset, up, then the first event stops the loop
     assert [label(s) for s in seen] == [
+        "reset",
         ("up", True),
         ("create", 1),
         ("up", False),

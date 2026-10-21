@@ -22,6 +22,7 @@ __all__ = [
     "PreconditionFailed",
     "ProblemError",
     "RateLimited",
+    "ResponseError",
     "ServerError",
     "Unauthorized",
     "UnknownResourceError",
@@ -58,6 +59,19 @@ class UnknownResourceError(ClientError):
 
 class ConnectionFailed(CrudError):  # noqa: N818 - name fixed by the SDK spec
     """The request never produced a response; `__cause__` holds the transport error."""
+
+
+class ResponseError(CrudError):
+    """A success response whose body is not the JSON the client expected.
+
+    `__cause__` holds the parse error; `response` is the offending response.
+    """
+
+    def __init__(self, message: str, response: httpx2.Response | None = None) -> None:
+        """Keep the response next to the message."""
+        super().__init__(message)
+        self.response = response
+        self.status = None if response is None else response.status_code
 
 
 class ProblemError(CrudError):

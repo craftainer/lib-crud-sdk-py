@@ -4,8 +4,9 @@ One connection per resource, reference-counted and fanned out to every listener.
 injects an already authenticated ``httpx2.Client``/``AsyncClient``. Frames carry no ``event:``
 name: the first has ``id: 0`` and ``{"subscriber_id": ...}``; later ones are record events.
 A reconnect passes ``?{resume_param}=<subscriber_id>`` explicitly (never ``Last-Event-ID``, which
-the server would read as a subscriber id) when the stream replays, and always tells listeners to
-reset, so the gap is covered even without replay. A stream silent for three keep-alive
+the server would read as a subscriber id) when the stream replays. Every handshake, the first of a
+process included (a persistent store may hold entries from before it), tells listeners to reset,
+so the gap is covered even without replay. A stream silent for three keep-alive
 intervals is dead (the read timeout) and is reconnected with exponential backoff and jitter.
 Events invalidate; they never apply snapshots.
 """
@@ -114,13 +115,15 @@ class _Stream:
             timestamp=str(data.get("timestamp", "")),
         )
 
-    def handshake(self, frame: _Handshake) -> bool:
-        """Record the handshake; return whether this is a reconnect (listeners must reset)."""
-        reconnect = self.connections > 0
+    def handshake(self, frame: _Handshake) -> None:
+        """Record the handshake. Listeners reset on every one, the first included.
+
+        A reconnect leaves a gap, and the first handshake of a process may find entries a
+        persistent store kept from before it, so both clear the resource.
+        """
         self.connections += 1
         self.subscriber_id = frame.subscriber_id
         self.attempt = 0
-        return reconnect
 
 
 def _default_jitter() -> Callable[[], float]:
@@ -280,8 +283,8 @@ class EventSubscriber:
                 return
             frame = stream.decode(sse)
             if isinstance(frame, _Handshake):
-                if stream.handshake(frame):
-                    self._fan_reset()
+                stream.handshake(frame)
+                self._fan_reset()
                 self._set_connected(True, stop)
             elif isinstance(frame, _Reset):
                 self._fan_reset()
@@ -453,8 +456,8 @@ class AsyncEventSubscriber:
             async for sse in source:
                 frame = stream.decode(sse)
                 if isinstance(frame, _Handshake):
-                    if stream.handshake(frame):
-                        await self._fan_reset()
+                    stream.handshake(frame)
+                    await self._fan_reset()
                     await self._set_connected(True)
                 elif isinstance(frame, _Reset):
                     await self._fan_reset()
@@ -502,7 +505,8 @@ def invalidate_on_events(
     Events clear the spec's prefixes, a reconnect clears the resource, and fresh hits are allowed
     only while a stream is connected: the layer's gate counts the connected wirings of a resource,
     so one going away never closes it for another. Returns the unsubscribe function (it also
-    withdraws this wiring's share of the gate).
+    withdraws this wiring's share of the gate). Raises `TypeError` if the layer and the subscriber
+    are not both sync or both async.
     """
     gate = _Gate(cache_layer, resource_name)
     if isinstance(cache_layer, CacheLayer) and isinstance(subscriber, EventSubscriber):
@@ -518,8 +522,8 @@ def invalidate_on_events(
             gate.set(connected)
 
         unsubscribe = subscriber.subscribe(on_event, on_reset=on_reset, on_status=on_status)
-    else:
-        async_layer = cast("AsyncCacheLayer", cache_layer)
+    elif isinstance(cache_layer, AsyncCacheLayer) and isinstance(subscriber, AsyncEventSubscriber):
+        async_layer = cache_layer
 
         async def aon_event(event: CrudEvent) -> None:
             await async_layer.invalidate_event(resource_name, event.action, event.record_id)
@@ -530,8 +534,11 @@ def invalidate_on_events(
         async def aon_status(connected: bool) -> None:
             gate.set(connected)
 
-        unsubscribe = cast("AsyncEventSubscriber", subscriber).subscribe(
-            aon_event, on_reset=aon_reset, on_status=aon_status
+        unsubscribe = subscriber.subscribe(aon_event, on_reset=aon_reset, on_status=aon_status)
+    else:
+        raise TypeError(
+            f"cannot wire a {type(cache_layer).__name__} to a {type(subscriber).__name__}: "
+            "use the sync layer with the sync subscriber and the async layer with the async one"
         )
 
     def stop() -> None:

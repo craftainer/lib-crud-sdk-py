@@ -69,6 +69,7 @@ _COLLECTIONS = ("list", "stats", "predict")
 _BULK_OPS = frozenset({"bulk_update", "bulk_delete"})
 _RECORD_WRITES = frozenset({"delete", "publish", "restore"})
 _CREATES = frozenset({"create", "clone", "draft"})
+_WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 type PolicyKey = str | tuple[str, str]
 """A resource name (all its versions) or ``(name, api_version)`` (``_`` when unversioned)."""
@@ -213,10 +214,7 @@ class _Core:
         version = ctx["api_version"] or UNVERSIONED
         generation = self.generation(resource)
         if request.method != "GET":
-            policy = self.policy_for(resource, version)
-            if policy is None or not policy.enabled:
-                return None
-            return _State(ctx, policy, None, None, version, generation)
+            return self._begin_write(request, ctx, version, generation)
         target = self._read_target(request, ctx, version)
         if target is None:
             return None
@@ -230,6 +228,17 @@ class _Core:
         return _State(
             ctx, policy, kind, key, version, generation, force_revalidate="no-cache" in control
         )
+
+    def _begin_write(
+        self, request: httpx2.Request, ctx: RequestContext, version: str, generation: int
+    ) -> _State | None:
+        """State of a write; HEAD, OPTIONS and the like neither read nor change a stored entry."""
+        if request.method not in _WRITE_METHODS:
+            return None
+        policy = self.policy_for(ctx["resource"], version)
+        if policy is None or not policy.enabled:
+            return None
+        return _State(ctx, policy, None, None, version, generation)
 
     def _read_target(
         self, request: httpx2.Request, ctx: RequestContext, version: str
@@ -249,18 +258,32 @@ class _Core:
         )
         return found, op, key
 
-    def _gate_open(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
-        """Whether an entry of ``kind`` may be fresh (or stale-while-revalidate) right now."""
+    def _fresh_allowed(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
+        """Whether an entry of ``kind`` may be served fresh (without a request) right now.
+
+        ``stats``/``predict`` are bounded by ``stats_ttl`` and need no stream; every other kind
+        needs the resource's stream. ``manifest`` and ``filters`` are never fresh.
+        """
         if policy.revalidate_only or kind in {"manifest", "filters"}:
-            return False  # filters are never fresh: events never clear them
-        return kind in STATS_KINDS or (resource is not None and resource in self._events_active)
+            return False
+        return kind in STATS_KINDS or self._stream_up(resource)
+
+    def _swr_allowed(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
+        """Whether a stale entry may be served while it refreshes: only while the stream is up."""
+        if policy.revalidate_only or kind in {"manifest", "filters"}:
+            return False
+        return self._stream_up(resource)
+
+    def _stream_up(self, resource: str | None) -> bool:
+        return resource is not None and resource in self._events_active
 
     def _times(self, policy: CachePolicy, resource: str | None, kind: str) -> tuple[float, float]:
         """Seconds fresh and seconds of stale-while-revalidate granted to a new entry."""
-        if not self._gate_open(policy, resource, kind):
-            return 0.0, 0.0
-        fresh = policy.stats_ttl if kind in STATS_KINDS else policy.max_age
-        return fresh, policy.stale_while_revalidate
+        fresh = 0.0
+        if self._fresh_allowed(policy, resource, kind):
+            fresh = policy.stats_ttl if kind in STATS_KINDS else policy.max_age
+        stale = policy.stale_while_revalidate if self._swr_allowed(policy, resource, kind) else 0.0
+        return fresh, stale
 
     def _entry_times(self, state: _State, kind: str) -> tuple[float, float]:
         """`_times` for a response; none if an invalidation landed while it was in flight."""
@@ -278,13 +301,12 @@ class _Core:
         if entry is None:
             return "miss"
         resource = state.ctx["resource"]
-        if self._gate_open(state.policy, resource, cast("str", state.kind)) and not (
-            state.force_revalidate
-        ):
+        kind = cast("str", state.kind)
+        if not state.force_revalidate:
             now = self.clock()
-            if now < entry.fresh_until:
+            if self._fresh_allowed(state.policy, resource, kind) and now < entry.fresh_until:
                 return "hit"
-            if swr and now < entry.stale_until:
+            if swr and self._swr_allowed(state.policy, resource, kind) and now < entry.stale_until:
                 return "stale"
         return "revalidate" if entry.etag is not None and state.policy.etag else "miss"
 
@@ -584,7 +606,7 @@ class AsyncCacheLayer:
         self._store = store
         self._core = _Core(policies, cache_manifest=cache_manifest, clock=clock)
         self._send: SendRaw | None = None
-        self._inflight: set[str] = set()
+        self._inflight: dict[str, asyncio.Task[None]] = {}
         self._tasks: set[asyncio.Task[None]] = set()
 
     def bind(self, send: SyncSendRaw | SendRaw) -> None:
@@ -598,6 +620,7 @@ class AsyncCacheLayer:
         for task in tasks:
             task.cancel()
         await asyncio.gather(*tasks, return_exceptions=True)
+        self._inflight.clear()
 
     async def on_request(self, request: httpx2.Request) -> httpx2.Response | None:
         """Serve a fresh or stale hit, or add ``If-None-Match`` for a stored entry."""
@@ -653,10 +676,16 @@ class AsyncCacheLayer:
         key = cast("str", state.key)
         if key in self._inflight:
             return
-        self._inflight.add(key)
         task = asyncio.get_running_loop().create_task(self._revalidate(state, request))
+        self._inflight[key] = task
         self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(lambda done: self._finished(key, done))
+
+    def _finished(self, key: str, task: asyncio.Task[None]) -> None:
+        """A revalidation ended, however (also cancelled before it ever started)."""
+        self._tasks.discard(task)
+        if self._inflight.get(key) is task:  # not a newer task for the same key
+            del self._inflight[key]
 
     async def _revalidate(self, state: _State, request: httpx2.Request) -> None:
         key = cast("str", state.key)
@@ -680,8 +709,6 @@ class AsyncCacheLayer:
             await result.aclose()
         except Exception:
             log.exception("background revalidation of %s failed", key)
-        finally:
-            self._inflight.discard(key)
 
     # -- control surface used by events and the client ------------------------------------
 

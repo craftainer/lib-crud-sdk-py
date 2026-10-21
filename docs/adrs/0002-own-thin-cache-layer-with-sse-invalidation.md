@@ -49,7 +49,8 @@ cache library.
   while the stream was down gets zero freshness, and an entry is not served fresh
   while the stream is down. `stats`/`predict` are bounded by `stats_ttl` instead, since
   the server caches those bodies for the same time and events do not carry aggregate
-  changes anyway. A policy with `revalidate_only` (the manifest hint, honoured by
+  changes anyway; that is a fresh window only, stale-while-revalidate of `stats`/`predict`
+  needs the stream like every other kind. A policy with `revalidate_only` (the manifest hint, honoured by
   `CachePolicy.from_manifest`) never grants a fresh window or stale-while-revalidate,
   whatever `max_age` says.
 - **A response in flight during an invalidation is not stored fresh.** Each resource has
@@ -59,7 +60,8 @@ cache library.
   it is deleted again. The async background revalidation captures it when it is sent.
 - **Events invalidate; they never apply snapshots.** Prefixes cleared per action follow
   the spec's table, in every API version; a reconnect clears the resource except
-  `filters`; a changed manifest ETag clears every resource's `filters`.
+  `filters`, and so does the first handshake of a process (a persistent store may hold
+  entries from before it); a changed manifest ETag clears every resource's `filters`.
 - **Writes keep the cache honest**: a single `PATCH` stores its response as the record
   entry and clears list/stats/predict and revisions; creates, deletes and bulk writes
   clear the affected prefixes; a `412` evicts the record entry. All in every version.
@@ -72,7 +74,8 @@ cache library.
 - **Stale-while-revalidate is async only** in 0.1 (a background task through the raw
   transport, one per key). The sync client revalidates.
 - **Stores** are a thread-safe LRU/TTL memory store and a Redis store (JSON with a
-  base64 body, `SET PX`, `SCAN` + `UNLINK` under a namespace, never `FLUSHDB`). A Redis
+  base64 body, `SET PX`, `SCAN` + `UNLINK` under a namespace, never `FLUSHDB`; an empty
+  namespace is a `ValueError`, since `clear()` would reach every key). A Redis
   outage or a corrupt value is a miss and a logged warning, never a failed request.
   Physical retention is `max(fresh + swr, 3600 s)`.
 - **SSE resume is explicit.** A reconnect passes `?subscriber_id=` (the manifest's
@@ -115,7 +118,17 @@ cache library.
   sent with, so the token provider is called once per request (and a retry after a 401
   looks up again under the refreshed token).
 - `AsyncCacheLayer.aclose` also unbinds the raw send, so a stale hit after close is
-  served without a background refresh.
+  served without a background refresh, and it forgets every in-flight key (a revalidation
+  cancelled before it started leaves none behind either).
+- Only `POST`, `PATCH`, `PUT` and `DELETE` invalidate; `HEAD` and `OPTIONS` pass through.
+- `client.scope()` uses the transport's header logic (the provider's token if it returns a
+  non-empty one, else the `Authorization` header configured on the client), and both flows
+  call a provider as `provider()` and, after a 401, `provider(refresh=True)`. A success
+  response whose body is not JSON raises `ResponseError`.
+- `invalidate_on_events` raises `TypeError` when the layer and the subscriber are not both
+  sync or both async.
+- The cache layer and the subscribers are exercised by a deterministic interleaving harness
+  (`tests/unit/concurrency/`) that checks the invariants above after every step.
 - Redis outages degrade to uncached requests silently apart from the log line.
 - `stats_ttl` freshness can serve data up to that long behind without events; callers
   who need otherwise set `stats_ttl=0` in the policy.

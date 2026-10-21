@@ -30,8 +30,10 @@ with CrudClient("https://api.example.com", token_provider=static_token("<jwt>"))
     heroes = client.resource("heroes")
 
     # A list query, validated against the manifest (filter ops, sortable fields) before sending.
-    strong = heroes.list({"power_level__min": 10, "name__icontains": "a"}, sort="-power_level", limit=20)
-    everyone = list(heroes.iter_all(sort="name"))      # pages with skip += limit
+    strong = heroes.list(
+        {"power_level__min": 10, "name__icontains": "a"}, sort="-power_level", limit=20
+    )
+    everyone = list(heroes.iter_all(sort="name"))  # pages with skip += limit
 
     # Opt in to caching: policies come from the manifest `cache` hints, the layer is installed as
     # a transport hook, and one SSE stream per resource invalidates it on every change.
@@ -39,11 +41,11 @@ with CrudClient("https://api.example.com", token_provider=static_token("<jwt>"))
         client,
         MemoryStore(max_entries=1024),
         overrides={"heroes": CachePolicy(max_age=60)},  # fresh hits, only while the stream is up
-        auto_if_match=True,                             # update/delete send the cached ETag
+        auto_if_match=True,  # update/delete send the cached ETag
     )
-    heroes.list()    # network
-    heroes.list()    # no request: fresh, and the event stream is connected
-    heroes.update(1, {"name": "Grace"})   # writes through to the record entry, clears the lists
+    heroes.list()  # network
+    heroes.list()  # no request: fresh, and the event stream is connected
+    heroes.update(1, {"name": "Grace"})  # writes through to the record entry, clears the lists
 # leaving the block stops the event streams
 ```
 
@@ -78,17 +80,19 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
   body with merged headers. Only `GET` `200` JSON is stored, never `no-store`.
 - `max_age > 0` (fresh hits) and `stale_while_revalidate` (async only) take effect only
   while the resource's SSE stream is connected, because events are what end freshness
-  early. Wire a stream with `invalidate_on_events(layer, subscriber, "heroes")`
+  early (also for `stats`/`predict`, whose `stale_while_revalidate` needs the stream; their
+  `stats_ttl` freshness does not). Wire a stream with `invalidate_on_events(layer, subscriber, "heroes")`
   (`EventSubscriber` / `AsyncEventSubscriber`).
   `stats` and `predict` use `stats_ttl` and need no stream.
-- Events clear cached prefixes; a reconnect clears the resource. A successful write
+- Events clear cached prefixes; the first handshake of a stream and every reconnect clear
+  the resource. A successful write
   updates or clears what it changed (`PATCH` writes its response through as the record
   entry), and a `412` evicts the record.
 - Stores: `MemoryStore` (LRU plus TTL) and, with the `redis` extra,
   `craftainer_crud_sdk.cache.redis.RedisStore` / `AsyncRedisStore`. A Redis outage is a
   cache miss and a logged warning. Cache keys carry no server identity: a store shared
   between servers or environments must use a per-origin namespace (for `RedisStore`, its
-  `namespace` argument).
+  `namespace` argument, which must not be empty).
 - `filters` always revalidate. The freshness gate is counted per resource, so several
   streams of one resource keep it open until the last is gone. `enable_cache` builds a
   policy per resource name and `api_version` from each manifest entry.
