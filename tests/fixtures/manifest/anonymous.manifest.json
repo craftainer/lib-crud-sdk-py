@@ -1,0 +1,281 @@
+{
+  "manifest_version": "1",
+  "service": {
+    "name": "heroes-api",
+    "version": "1.4.0"
+  },
+  "resources": [
+    {
+      "name": "quests",
+      "title": "Quests",
+      "api_version": "v1",
+      "base_path": "/api/crud/v1/quests/v1/json",
+      "formats": {
+        "json": "/api/crud/v1/quests/v1/json"
+      },
+      "id_field": "id",
+      "schemas": {
+        "read": {
+          "$defs": {
+            "Difficulty": {
+              "enum": [
+                "easy",
+                "hard",
+                "deadly"
+              ],
+              "title": "Difficulty",
+              "type": "string"
+            }
+          },
+          "properties": {
+            "id": {
+              "title": "Id",
+              "type": "integer"
+            },
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "difficulty": {
+              "$ref": "#/$defs/Difficulty"
+            },
+            "due_on": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due On"
+            }
+          },
+          "required": [
+            "id",
+            "title",
+            "difficulty"
+          ],
+          "title": "Quest",
+          "type": "object"
+        },
+        "create": {
+          "$defs": {
+            "Difficulty": {
+              "enum": [
+                "easy",
+                "hard",
+                "deadly"
+              ],
+              "title": "Difficulty",
+              "type": "string"
+            }
+          },
+          "properties": {
+            "title": {
+              "title": "Title",
+              "type": "string"
+            },
+            "difficulty": {
+              "$ref": "#/$defs/Difficulty"
+            },
+            "due_on": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due On"
+            }
+          },
+          "required": [
+            "title",
+            "difficulty"
+          ],
+          "title": "QuestCreate",
+          "type": "object"
+        },
+        "update": {
+          "$defs": {
+            "Difficulty": {
+              "enum": [
+                "easy",
+                "hard",
+                "deadly"
+              ],
+              "title": "Difficulty",
+              "type": "string"
+            }
+          },
+          "properties": {
+            "title": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Title"
+            },
+            "difficulty": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Difficulty"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null
+            },
+            "due_on": {
+              "anyOf": [
+                {
+                  "format": "date",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "default": null,
+              "title": "Due On"
+            }
+          },
+          "title": "QuestUpdate",
+          "type": "object"
+        },
+        "draft": null
+      },
+      "fields": [
+        {
+          "name": "id",
+          "value_type": "integer",
+          "filter_ops": [
+            "eq",
+            "min",
+            "max",
+            "in"
+          ],
+          "sortable": true,
+          "choices": null,
+          "numeric": true,
+          "categorical": false,
+          "read_only": true,
+          "required": false
+        },
+        {
+          "name": "title",
+          "value_type": "string",
+          "filter_ops": [
+            "eq",
+            "contains",
+            "icontains",
+            "regex"
+          ],
+          "sortable": true,
+          "choices": null,
+          "numeric": false,
+          "categorical": false,
+          "read_only": false,
+          "required": true
+        },
+        {
+          "name": "difficulty",
+          "value_type": "enum",
+          "filter_ops": [
+            "eq",
+            "in"
+          ],
+          "sortable": true,
+          "choices": [
+            "easy",
+            "hard",
+            "deadly"
+          ],
+          "numeric": false,
+          "categorical": true,
+          "read_only": false,
+          "required": true
+        },
+        {
+          "name": "due_on",
+          "value_type": "date",
+          "filter_ops": [
+            "eq",
+            "min",
+            "max",
+            "in"
+          ],
+          "sortable": true,
+          "choices": null,
+          "numeric": false,
+          "categorical": false,
+          "read_only": false,
+          "required": false
+        }
+      ],
+      "pagination": {
+        "style": "offset",
+        "skip_param": "skip",
+        "limit_param": "limit",
+        "sort_param": "sort",
+        "default_limit": 100,
+        "max_limit": 1000,
+        "total": false
+      },
+      "capabilities": {
+        "bulk_update": true,
+        "bulk_delete": true,
+        "clone": true,
+        "draft_publish": false,
+        "archive_restore": false,
+        "revisions": false,
+        "events": null,
+        "stats": false,
+        "predict": false,
+        "conditional_requests": true,
+        "owner_scoped": false,
+        "schedulable": false
+      },
+      "paths": {
+        "filters": "/api/crud/v1/quests/v1/json/filters",
+        "clone": "/api/crud/v1/quests/v1/json/clone"
+      },
+      "bulk": {
+        "max_matched": 1000
+      },
+      "auth": {
+        "scheme": "bearer",
+        "oidc_discovery_url": "https://auth.example.com/realms/craftainer/.well-known/openid-configuration",
+        "public_read": true,
+        "read_roles": [],
+        "write_roles": [
+          "admin"
+        ],
+        "delete_roles": [
+          "admin"
+        ]
+      },
+      "cache": {
+        "etag": true,
+        "max_age": 0,
+        "stats_ttl": null,
+        "stale_while_revalidate": 0,
+        "list_etag": "weak",
+        "record_etag": "strong",
+        "revalidate_only": true
+      }
+    }
+  ]
+}
