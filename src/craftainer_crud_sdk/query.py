@@ -75,7 +75,10 @@ def format_scalar(field: FieldLike, value: object) -> str:
     if kind == "integer":
         text = str(value) if isinstance(value, int) and not isinstance(value, bool) else None
     elif kind == "number":
-        ok = _is_number(value) and math.isfinite(float(value))  # type: ignore[arg-type]
+        try:
+            ok = _is_number(value) and math.isfinite(float(value))  # type: ignore[arg-type]
+        except OverflowError:
+            ok = False
         text = str(value) if ok else None
     elif kind == "boolean":
         text = ("true" if value else "false") if isinstance(value, bool) else None

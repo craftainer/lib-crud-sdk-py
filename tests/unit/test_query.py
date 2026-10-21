@@ -130,6 +130,7 @@ ERRORS: list[tuple[dict[str, Any], str]] = [
     ({"filters": {"power_level": True}}, "cannot take"),
     ({"filters": {"power_level": 1.5}}, "cannot take"),
     ({"filters": {"ratio": float("nan")}}, "cannot take"),
+    ({"filters": {"ratio": 10**400}}, "cannot take"),
     ({"filters": {"ratio": "1"}}, "cannot take"),
     ({"filters": {"ratio": True}}, "cannot take"),
     ({"filters": {"name": 5}}, "cannot take"),

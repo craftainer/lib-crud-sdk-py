@@ -279,3 +279,18 @@ async def test_async_token_provider_refresh() -> None:
     heroes = await _client(handler, token_provider=provider).resource("heroes")
     assert await heroes.list() == []
     assert headers == ["Bearer t1", "Bearer t2"]
+
+
+@pytest.mark.asyncio
+async def test_aclose_still_closes_http_when_a_closer_raises() -> None:
+    """A failing closer does not leak the HTTP client."""
+    client = _client()
+
+    async def boom() -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    client.add_closer(boom)
+    with pytest.raises(RuntimeError, match="boom"):
+        await client.aclose()
+    assert client._http.is_closed

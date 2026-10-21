@@ -193,10 +193,12 @@ class EventSubscriber:
             last = not self._listeners
             if last:  # decided under the lock, so a racing subscribe sees a stopping reader
                 self._stop.set()
-        if listener.on_status is not None and self._connected:
-            listener.on_status(False)
-        if last:
-            self._stop_reader()
+        try:
+            if listener.on_status is not None and self._connected:
+                _guard(listener.on_status, False)
+        finally:
+            if last:
+                self._stop_reader()
 
     def _stop_reader(self) -> None:
         """Ask the loop to stop and unblock a reader waiting for a frame by closing its stream."""

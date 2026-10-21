@@ -1,4 +1,4 @@
-# 0001. Cache with our own thin layer, invalidated by SSE
+# 0002. Cache with our own thin layer, invalidated by SSE
 
 ## Status
 

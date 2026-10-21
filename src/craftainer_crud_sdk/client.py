@@ -244,7 +244,11 @@ def _checked(response: httpx2.Response) -> httpx2.Response:
 
 
 def _decode(response: httpx2.Response) -> object:
-    return None if response.status_code == httpx2.codes.NO_CONTENT else response.json()
+    return (
+        None
+        if response.status_code == httpx2.codes.NO_CONTENT or not response.content
+        else response.json()
+    )
 
 
 class _QueryArgs(TypedDict, total=False):
@@ -463,7 +467,7 @@ class ResourceClient(_Plan):
         include_unpublished: bool | None = None,
     ) -> Iterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
-        size = limit or self.resource.pagination.default_limit
+        size = self.resource.pagination.default_limit if limit is None else limit
         while True:
             page = self.list(
                 filters,
@@ -636,13 +640,14 @@ class CrudClient:
         """A handle for `name` (the highest `api_version` unless given)."""
         return ResourceClient(self, _lookup(self.manifest(), name, api_version))
 
-    def _send(self, call: _Call) -> object:
+    def _send(self, call: _Call, *, decode: bool = True) -> object:
         request = _build(self._http, call)
         try:
             response = self._http.send(request)
         except httpx2.RequestError as exc:
             raise ConnectionFailed(str(exc)) from exc
-        return _decode(_checked(response))
+        checked = _checked(response)
+        return _decode(checked) if decode else None
 
     def send_object(self, call: _Call) -> JsonObject:
         """Internal: run a call that returns a JSON object."""
@@ -654,16 +659,20 @@ class CrudClient:
 
     def send_none(self, call: _Call) -> None:
         """Internal: run a call whose body is ignored."""
-        self._send(call)
+        self._send(call, decode=False)
 
     def close(self) -> None:
         """Stop what `add_closer` registered, close the HTTP client and its transport."""
         closers, self._closers = self._closers[::-1], []
-        for close, _ in closers:
-            close()
-        self._http.close()
-        for _, join in closers:
-            join()
+        try:
+            for close, _ in closers:
+                close()
+        finally:
+            try:
+                self._http.close()
+            finally:
+                for _, join in closers:
+                    join()
 
     def __enter__(self) -> Self:
         """Enter the context manager."""
@@ -715,7 +724,7 @@ class AsyncResourceClient(_Plan):
         include_unpublished: bool | None = None,
     ) -> AsyncIterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
-        size = limit or self.resource.pagination.default_limit
+        size = self.resource.pagination.default_limit if limit is None else limit
         while True:
             page = await self.list(
                 filters,
@@ -883,13 +892,14 @@ class AsyncCrudClient:
         """A handle for `name` (the highest `api_version` unless given)."""
         return AsyncResourceClient(self, _lookup(await self.manifest(), name, api_version))
 
-    async def _send(self, call: _Call) -> object:
+    async def _send(self, call: _Call, *, decode: bool = True) -> object:
         request = _build(self._http, call)
         try:
             response = await self._http.send(request)
         except httpx2.RequestError as exc:
             raise ConnectionFailed(str(exc)) from exc
-        return _decode(_checked(response))
+        checked = _checked(response)
+        return _decode(checked) if decode else None
 
     async def send_object(self, call: _Call) -> JsonObject:
         """Internal: run a call that returns a JSON object."""
@@ -901,14 +911,16 @@ class AsyncCrudClient:
 
     async def send_none(self, call: _Call) -> None:
         """Internal: run a call whose body is ignored."""
-        await self._send(call)
+        await self._send(call, decode=False)
 
     async def aclose(self) -> None:
         """Await what `add_closer` registered, then close the HTTP client and its transport."""
         closers, self._closers = self._closers[::-1], []
-        for close in closers:
-            await close()
-        await self._http.aclose()
+        try:
+            for close in closers:
+                await close()
+        finally:
+            await self._http.aclose()
 
     async def __aenter__(self) -> Self:
         """Enter the async context manager."""

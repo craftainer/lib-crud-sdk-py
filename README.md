@@ -89,7 +89,7 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
   cache miss and a logged warning.
 
 The design and its reasons are in
-[`docs/adrs/0001-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0001-own-thin-cache-layer-with-sse-invalidation.md).
+[`docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md).
 
 ## Publishing to PyPI
 

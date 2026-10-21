@@ -587,3 +587,33 @@ def test_paging_parameter_names_come_from_the_manifest() -> None:
     seen.clear()
     heroes.list(sort="name", skip=3, limit=4)
     assert seen[0].url.query == b"order=name&offset=3&page_size=4"
+
+
+def test_delete_ignores_an_empty_or_non_json_success_body() -> None:
+    """A successful delete is not an error because its body is empty or not JSON."""
+    for response in (httpx2.Response(200), httpx2.Response(202, text="accepted")):
+        heroes = _client(lambda r, response=response: response).resource("heroes")  # type: ignore[misc]
+        heroes.delete(3)
+
+
+def test_close_still_closes_http_and_joins_when_a_closer_raises() -> None:
+    """A failing closer does not leak the HTTP client or skip the joins."""
+    client = _client()
+    joined: list[bool] = []
+
+    def boom() -> None:
+        msg = "boom"
+        raise RuntimeError(msg)
+
+    client.add_closer(boom, lambda: joined.append(True))
+    with pytest.raises(RuntimeError, match="boom"):
+        client.close()
+    assert client._http.is_closed
+    assert joined == [True]
+
+
+def test_iter_all_rejects_a_zero_limit() -> None:
+    """`limit=0` is an error, not the default limit."""
+    heroes = _client().resource("heroes")
+    with pytest.raises(InvalidQueryError):
+        next(iter(heroes.iter_all(limit=0)))

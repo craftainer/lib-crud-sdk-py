@@ -1,4 +1,4 @@
-"""Exception hierarchy: client-side errors and RFC 9457 problem details (ADR-0004)."""
+"""Exception hierarchy: client-side errors and RFC 9457 problem details."""
 
 from __future__ import annotations
 
