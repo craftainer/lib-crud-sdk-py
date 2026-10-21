@@ -253,21 +253,26 @@ def test_server_error_keeps_entry() -> None:
 def test_manifest_cached_by_scope_and_filters_cleared_on_change() -> None:
     """Manifest cached by scope and filters cleared on change."""
     runner, server, store, layer, _ = setup()
-    server.body = {"resources": [{"name": "heroes"}, {"name": "villains"}]}
+    server.body = {
+        "resources": [
+            {"name": "heroes", "api_version": "v1"},
+            {"name": "villains", "api_version": "v1"},
+        ]
+    }
     manifest = make_request("manifest", resource=None, scope="s1")
     runner.send(manifest)
-    seed(store, "v1/heroes/filters/_/s1/")
-    seed(store, "v1/villains/filters/_/s1/")
-    seed(store, "v1/heroes/list/_/s1/")
+    seed(store, "v1/heroes/v1/filters/_/s1/")
+    seed(store, "v1/villains/v1/filters/_/s1/")
+    seed(store, "v1/heroes/v1/list/_/s1/")
     assert (
         status_of(runner.send(make_request("manifest", resource=None, scope="s1"))) == "revalidated"
     )
     assert len(store) == 4  # unchanged ETag: nothing cleared
     server.etag = '"m2"'
     runner.send(make_request("manifest", resource=None, scope="s1"))
-    assert store.get("v1/heroes/filters/_/s1/") is None
-    assert store.get("v1/villains/filters/_/s1/") is None
-    assert store.get("v1/heroes/list/_/s1/") is not None
+    assert store.get("v1/heroes/v1/filters/_/s1/") is None
+    assert store.get("v1/villains/v1/filters/_/s1/") is None
+    assert store.get("v1/heroes/v1/list/_/s1/") is not None
     assert store.get("v1/_manifest/s1") is not None
     assert layer.cached_etag("heroes", 1, "s1") is None
 
@@ -278,9 +283,9 @@ def test_manifest_with_unreadable_body_and_disabled() -> None:
     server.body = ["not", "a", "manifest"]
     runner.send(make_request("manifest", resource=None))
     server.etag = '"m2"'
-    seed(store, "v1/heroes/filters/_/anon/")
+    seed(store, "v1/heroes/_/filters/_/anon/")
     runner.send(make_request("manifest", resource=None))
-    assert store.get("v1/heroes/filters/_/anon/") is None  # policies still name heroes
+    assert store.get("v1/heroes/_/filters/_/anon/") is None  # policies still name heroes
     runner2, server2, store2, _, _ = setup(manifest=False)
     runner2.send(make_request("manifest", resource=None))
     assert len(store2) == 0
@@ -303,7 +308,7 @@ def test_write_through_after_patch() -> None:
     assert store.get(build_key("heroes", "list", None, "anon")) is None
     assert store.get(build_key("heroes", "stats", None, "anon")) is None
     assert store.get(build_key("heroes", "revisions", 7, "anon")) is None
-    assert store.get(build_key("heroes", "record", 8, "anon")) is not None
+    assert store.get(build_key("heroes", "record", 8, "anon")) is None  # the resource is cleared
     assert layer.cached_etag("heroes", 7, "anon") == '"v2"'
     calls = len(server.calls)
     hit = runner.send(make_request("record", record_id=7, query="id=7"))
@@ -351,64 +356,31 @@ def test_other_write_failures_change_nothing() -> None:
     assert len(store) == 1
 
 
-def test_create_delete_publish_and_bulk_invalidation() -> None:
-    """Create delete publish and bulk invalidation."""
+@pytest.mark.parametrize(
+    ("op", "method", "status", "record_id"),
+    [
+        ("create", "POST", 201, None),
+        ("delete", "DELETE", 204, 1),
+        ("publish", "POST", 200, 2),
+        ("bulk_update", "PATCH", 200, None),
+        ("bulk_delete", "DELETE", 200, None),
+        ("restore", "POST", 200, None),
+    ],
+)
+def test_every_successful_write_clears_the_whole_resource(
+    op: Op, method: str, status: int, record_id: int | None
+) -> None:
+    """A write clears the resource in every API version (they share one event stream)."""
     runner, server, store, _, _ = setup(events=True)
-
-    ops_without_record: tuple[Op, ...] = ("list", "stats", "predict", "filters")
-
-    def fill() -> None:
-        """Fill."""
-        for op in ops_without_record:
-            runner.send(make_request(op))
-        for rid in (1, 2, 3):
-            runner.send(make_request("record", record_id=rid, query=f"id={rid}"))
-            runner.send(make_request("revisions", record_id=rid))
-
-    def has(kind: str, rid: int | None = None) -> bool:
-        """Has."""
-        return store.get(build_key("heroes", kind, rid, "anon")) is not None
-
-    fill()
-    server.status = 201
-    runner.send(make_request("create", method="POST"))
-    assert not has("list") and not has("stats") and not has("predict")
-    assert has("filters") and has("record", 1)
-
-    fill()
-    server.status = 204
-    runner.send(make_request("delete", method="DELETE", record_id=1))
-    assert not has("list") and not has("record", 1) and not has("revisions", 1)
-    assert has("record", 2)
-
-    fill()
-    server.status = 200
-    runner.send(make_request("publish", method="POST", record_id=2))
-    assert not has("record", 2) and has("record", 3)
-
-    fill()
-    server.body = {"matched": 2, "ids": [1, 3]}
-    runner.send(make_request("bulk_update", method="PATCH"))
-    assert not has("list") and not has("record", 1) and not has("revisions", 3)
-    assert has("record", 2) and has("filters")
-
-    fill()
-    runner.send(make_request("restore", method="POST"))  # bulk restore
-    assert not has("record", 3) and has("record", 2)
-
-
-def test_bulk_with_unreadable_body_clears_the_resource_but_not_filters() -> None:
-    """Bulk with unreadable body clears the resource but not filters."""
-    runner, server, store, _, _ = setup(events=True)
-    for op in ("list", "filters"):
-        runner.send(make_request(op))
-    runner.send(make_request("record", record_id=1, query="id=1"))
-    server.body = {"matched": 1}
-    runner.send(make_request("bulk_delete", method="DELETE"))
-    assert len(store) == 1
-    assert store.get(build_key("heroes", "filters", None, "anon")) is not None
-    server.body = {"ids": ["x"]}
-    runner.send(make_request("bulk_delete", method="DELETE"))
+    for version in ("v1", "v2"):
+        runner.send(make_request("list", api_version=version))
+        runner.send(make_request("record", record_id=1, query="id=1", api_version=version))
+    runner.send(make_request("list", resource="villains"))
+    assert len(store) == 5
+    server.status = status
+    runner.send(make_request(op, method=method, record_id=record_id, api_version="v1"))
+    assert [k for k in store._data if k.startswith("v1/heroes/")] == []
+    assert len(store) == 1  # another resource is untouched
 
 
 def test_unknown_write_op_clears_the_resource() -> None:
@@ -420,47 +392,125 @@ def test_unknown_write_op_clears_the_resource() -> None:
     assert len(store) == 0
 
 
-def test_event_invalidation_per_action_row() -> None:
-    """Event invalidation per action row."""
+def test_events_and_reconnect_clear_the_resource_across_versions() -> None:
+    """Whatever the action, an event clears the resource in v1 and v2, not other resources."""
     runner, _, store, layer, _ = setup(events=True)
 
     def fill() -> None:
         """Fill."""
-        for op in ("list", "stats", "predict", "filters"):
-            runner.send(make_request(op))
-        for rid in (1, 2):
-            runner.send(make_request("record", record_id=rid, query=f"id={rid}"))
-            runner.send(make_request("revisions", record_id=rid))
+        for version in ("v1", "v2"):
+            for op in ("list", "filters"):
+                runner.send(make_request(op, api_version=version))
+            runner.send(make_request("record", record_id=1, query="id=1", api_version=version))
+        runner.send(make_request("list", resource="villains"))
 
-    def alive() -> set[str]:
-        """Alive."""
-        return set(store._data)
-
-    fill()
-    layer.invalidate_event("heroes", "create", 1)
-    assert alive() == {
-        "v1/heroes/filters/_/anon/",
-        "v1/heroes/record/1/anon/",
-        "v1/heroes/record/2/anon/",
-        "v1/heroes/revisions/1/anon/",
-        "v1/heroes/revisions/2/anon/",
-    }
-    for action in ("update", "delete", "restore"):
+    for action, rid in (("create", 1), ("update", 1), ("delete", 1), ("restore", 1), ("x", None)):
         fill()
-        layer.invalidate_event("heroes", action, 1)
-        assert alive() == {
-            "v1/heroes/filters/_/anon/",
-            "v1/heroes/record/2/anon/",
-            "v1/heroes/revisions/2/anon/",
-        }
-    fill()
-    layer.invalidate_event("heroes", "update", None)
-    assert alive() == {"v1/heroes/filters/_/anon/"}
+        assert len(store) == 7
+        layer.invalidate_event("heroes", action, rid)
+        assert set(store._data) == {"v1/villains/_/list/_/anon/"}
     fill()
     layer.clear_resource("heroes")
-    assert alive() == {"v1/heroes/filters/_/anon/"}
-    layer.clear("v1/heroes/")
-    assert alive() == set()
+    assert set(store._data) == {"v1/villains/_/list/_/anon/"}
+    layer.clear("v1/villains/")
+    assert set(store._data) == set()
     fill()
     layer.clear()
-    assert alive() == set()
+    assert set(store._data) == set()
+
+
+def test_v1_and_v2_do_not_share_entries() -> None:
+    """The same query under two API versions is two entries with their own ETags."""
+    runner, server, store, layer, _ = setup(events=True)
+    runner.send(make_request("record", record_id=7, query="id=7", api_version="v1"))
+    server.etag = '"v2-etag"'
+    server.body = {"id": 7, "name": "two"}
+    second = runner.send(make_request("record", record_id=7, query="id=7", api_version="v2"))
+    assert status_of(second) == "miss"  # not served from v1
+    assert second.json()["name"] == "two"
+    assert layer.cached_etag("heroes", 7, "anon", "v1") == ETAG
+    assert layer.cached_etag("heroes", 7, "anon", "v2") == '"v2-etag"'
+    assert layer.cached_etag("heroes", 7, "anon") is None  # unversioned
+    assert store.get(build_key("heroes", "record", 7, "anon", api_version="v1")) is not None
+    layer.invalidate_event("heroes", "update", 7)  # one event clears both versions
+    assert len(store) == 0
+
+
+def test_a_response_in_flight_during_an_invalidation_is_stored_revalidate_only() -> None:
+    """Invalidate between request and response: the entry has no fresh window."""
+    runner, server, store, layer, clock = setup(CachePolicy(max_age=60), events=True)
+    request = make_request("list")
+    assert layer.on_request(request) is None
+    response = runner.transport.handle_request(request)
+    layer.invalidate_event("heroes", "update", 1)  # lands while the response is in flight
+    layer.on_response(request, response)
+    entry = store.get(build_key("heroes", "list", None, "anon"))
+    assert entry is not None
+    assert entry.fresh_until <= entry.stored_at  # revalidate-only
+    assert status_of(runner.send(make_request("list"))) == "revalidated"
+    # a request made after the invalidation is stored fresh again
+    store.clear()
+    runner.send(make_request("list"))
+    entry = store.get(build_key("heroes", "list", None, "anon"))
+    assert entry is not None
+    assert entry.fresh_until == clock.now + 60
+    assert len(server.calls) == 3
+
+
+def test_an_invalidation_during_the_store_drops_the_new_entry() -> None:
+    """An invalidation landing between the check and the store removes what was just stored."""
+    runner, _, store, layer, _ = setup(CachePolicy(max_age=60), events=True)
+    request = make_request("list")
+    layer.on_request(request)
+    response = runner.transport.handle_request(request)
+    real_set = store.set
+
+    def set_then_invalidate(key: str, entry: CacheEntry, ttl: float) -> None:
+        """Store, then an event lands before the layer re-checks."""
+        real_set(key, entry, ttl)
+        layer.invalidate_event("heroes", "update", 1)
+
+    store.set = set_then_invalidate  # type: ignore[method-assign]
+    layer.on_response(request, response)
+    assert len(store) == 0
+
+
+def test_a_write_clears_reads_in_flight_too() -> None:
+    """A read in flight while this client's own write completes is not stored fresh."""
+    runner, server, store, layer, _ = setup(CachePolicy(max_age=60), events=True)
+    read = make_request("list")
+    layer.on_request(read)
+    response = runner.transport.handle_request(read)
+    server.status = 201
+    runner.send(make_request("create", method="POST"))
+    layer.on_response(read, response)
+    entry = store.get(build_key("heroes", "list", None, "anon"))
+    assert entry is not None
+    assert entry.fresh_until <= entry.stored_at
+
+
+def test_revalidate_only_policy_never_grants_freshness() -> None:
+    """The manifest hint wins over max_age and stale_while_revalidate."""
+    policy = CachePolicy(max_age=60, stale_while_revalidate=30, revalidate_only=True)
+    runner, server, store, _, _ = setup(policy, events=True)
+    runner.send(make_request("list"))
+    entry = store.get(build_key("heroes", "list", None, "anon"))
+    assert entry is not None
+    assert entry.fresh_until <= entry.stored_at
+    assert status_of(runner.send(make_request("list"))) == "revalidated"
+    runner.send(make_request("stats"))
+    stats = store.get(build_key("heroes", "stats", None, "anon"))
+    assert stats is not None
+    assert stats.fresh_until <= stats.stored_at
+    assert len(server.calls) == 3
+
+
+def test_a_storable_200_without_validator_or_freshness_deletes_the_old_entry() -> None:
+    """No stale validator survives a 200 that cannot be revalidated."""
+    runner, server, store, _, _ = setup()
+    runner.send(make_request("list"))
+    assert len(store) == 1
+    server.etag = None
+    server.status = 200
+    runner.send(make_request("list"))
+    assert len(store) == 0

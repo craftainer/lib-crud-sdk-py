@@ -153,6 +153,7 @@ class EventSubscriber:
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._connected = False
+        self._response: httpx2.Response | None = None  # the live stream, closed to unblock it
 
     def subscribe(
         self,
@@ -189,46 +190,83 @@ class EventSubscriber:
         if listener.on_status is not None and self._connected:
             listener.on_status(False)
         if last:
-            self._stop.set()
+            self._stop_reader()
+
+    def _stop_reader(self) -> None:
+        """Ask the loop to stop and unblock a reader waiting for a frame by closing its stream."""
+        self._stop.set()
+        with self._lock:
+            response = self._response
+        if response is not None:
+            response.close()
 
     def close(self, timeout: float = 5.0) -> None:
-        """Stop the stream and wait up to ``timeout`` seconds for its thread."""
-        self._stop.set()
+        """Stop the stream, unblock the reader and wait up to ``timeout`` seconds for its thread.
+
+        After it returns the thread has exited (a warning is logged if it has not), so the
+        HTTP client may be closed safely.
+        """
+        self._stop_reader()
         thread = self._thread
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout)
+            if thread.is_alive():
+                log.warning("event stream %s did not stop within %ss", self._stream.url, timeout)
 
     def run(self) -> None:
-        """Connect, read and reconnect until stopped (blocking; the thread's body)."""
+        """Connect, read and reconnect until stopped (blocking; the thread's body).
+
+        However it ends, listeners get ``on_status(False)`` and the thread state is reset, so a
+        later `subscribe` starts a new stream.
+        """
         stream = self._stream
-        while not self._stop.is_set():
-            try:
-                self._read_once()
-            except httpx2.HTTPError as exc:
-                log.warning("event stream %s lost: %s", stream.url, exc)
+        try:
+            while not self._stop.is_set():
+                try:
+                    self._read_once()
+                except Exception as exc:
+                    if self._stop.is_set():
+                        break  # the stream was closed under the reader
+                    if not isinstance(exc, httpx2.HTTPError):
+                        raise
+                    log.warning("event stream %s lost: %s", stream.url, exc)
+                self._set_connected(False)
+                if self._stop.is_set():
+                    break
+                self._stop.wait(stream.backoff())
+        except Exception:
+            log.exception("event stream %s died", stream.url)
+        finally:
             self._set_connected(False)
-            if self._stop.is_set():
-                break
-            self._stop.wait(stream.backoff())
-        with self._lock:
-            self._thread = None
+            with self._lock:
+                self._thread = None
 
     def _read_once(self) -> None:
         stream = self._stream
         with self._client.sse(stream.url, params=stream.params, timeout=stream.timeout) as source:
-            source.response.raise_for_status()
-            for sse in source:
-                if self._stop.is_set():
-                    return
-                frame = stream.decode(sse)
-                if isinstance(frame, _Handshake):
-                    if stream.handshake(frame):
-                        self._fan_reset()
-                    self._set_connected(True)
-                elif isinstance(frame, _Reset):
+            with self._lock:
+                self._response = source.response
+            try:
+                self._read_frames(source)
+            finally:
+                with self._lock:
+                    self._response = None
+
+    def _read_frames(self, source: httpx2.EventSource) -> None:
+        stream = self._stream
+        source.response.raise_for_status()
+        for sse in source:
+            if self._stop.is_set():
+                return
+            frame = stream.decode(sse)
+            if isinstance(frame, _Handshake):
+                if stream.handshake(frame):
                     self._fan_reset()
-                elif frame is not None:
-                    self._fan_event(frame)
+                self._set_connected(True)
+            elif isinstance(frame, _Reset):
+                self._fan_reset()
+            elif frame is not None:
+                self._fan_event(frame)
 
     def _snapshot(self) -> list[_Listener]:
         with self._lock:
@@ -332,9 +370,12 @@ class AsyncEventSubscriber:
                     log.warning("event stream %s lost: %s", stream.url, exc)
                 await self._set_connected(False)
                 await asyncio.sleep(stream.backoff())
+        except Exception:
+            log.exception("event stream %s died", stream.url)
         finally:
+            # On any exit (cancel, close, a bug) tell the listeners, so the gate closes.
             state.task = None
-            state.connected = False
+            await self._set_connected(False)
 
     async def _read_once(self) -> None:
         stream = self._stream

@@ -20,9 +20,10 @@ class CachePolicy:
     stats_ttl: float = 0.0
     stale_while_revalidate: float = 0.0
     etag: bool = True
+    revalidate_only: bool = False
 
     @classmethod
-    def from_manifest(
+    def from_manifest(  # noqa: PLR0913  # one keyword override per policy field
         cls,
         resource: Mapping[str, object],
         *,
@@ -30,6 +31,7 @@ class CachePolicy:
         max_age: float | None = None,
         stats_ttl: float | None = None,
         stale_while_revalidate: float | None = None,
+        revalidate_only: bool | None = None,
     ) -> CachePolicy:
         """Build a policy from a manifest resource dict (I1); keyword arguments override hints."""
         hints = resource.get("cache")
@@ -44,6 +46,11 @@ class CachePolicy:
                 else _seconds(hints.get("stale_while_revalidate"))
             ),
             etag=hints.get("etag") is not False,
+            revalidate_only=(
+                revalidate_only
+                if revalidate_only is not None
+                else hints.get("revalidate_only") is True
+            ),
         )
 
 
