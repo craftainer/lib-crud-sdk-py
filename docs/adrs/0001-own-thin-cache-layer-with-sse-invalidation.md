@@ -30,7 +30,14 @@ cache library.
   `v1/R/record/{id}/` or `v1/R/list/` clears an entry in every version, and scope after
   that clears it for every caller. The resource, operation, record id, API version (`_`
   when `None`) and scope come from the request's `RequestContext`, never from the URL or
-  the Authorization header.
+  the Authorization header (the cache layer does not read it).
+- **The scope is derived from the Authorization header actually on the wire**, in the
+  transport just before the hooks run, after the client headers, the auth flow and any
+  401 retry have settled: `anon` only when there is no Authorization at all, otherwise
+  the first 32 hex of the sha256 of the bearer token (any other scheme hashes the whole
+  value). A client configured with a static `Authorization` header and no token provider
+  therefore never shares entries with another caller through a shared store. The raw
+  credential never enters a key or a log.
 - **Only GET 200 JSON** is stored; `Cache-Control: no-store` (response or request),
   `Vary: *` and `Vary` on anything but Authorization/Accept/Accept-Encoding are never
   stored. A storable `200` with no ETag and no fresh window deletes the old entry, so no
@@ -56,6 +63,9 @@ cache library.
 - **Writes keep the cache honest**: a single `PATCH` stores its response as the record
   entry and clears list/stats/predict and revisions; creates, deletes and bulk writes
   clear the affected prefixes; a `412` evicts the record entry. All in every version.
+  One response's prefixes (about two per id for a bulk write) are cleared with a single
+  store walk: the stores offer `clear_many(prefixes)`, one `SCAN` (memory: one pass)
+  tested against all the prefixes; a custom store without it gets one `clear` per prefix.
 - **Stale-while-revalidate is async only** in 0.1 (a background task through the raw
   transport, one per key). The sync client revalidates.
 - **Stores** are a thread-safe LRU/TTL memory store and a Redis store (JSON with a
@@ -72,7 +82,11 @@ cache library.
   `on_status(False)` on any exit, including a non-HTTP exception, and the sync thread
   state is reset so a later subscribe restarts the stream. `close()` and the last
   unsubscribe close the live response to unblock the reader, and `close()` joins the
-  thread, so the HTTP client can be closed afterwards.
+  thread, so the HTTP client can be closed afterwards. Each reader has its own stop
+  event (sync) or is detached from the state at once (async), so a subscribe that
+  arrives while the previous reader is still winding down starts a new one, and the old
+  reader never clears or flips the state of the new one. A listener that joins an
+  already connected stream is told `on_status(True)` (sync and async alike).
 
 ## Consequences
 
@@ -85,7 +99,12 @@ cache library.
   page, in every version) but cannot serve a wrong page; applying snapshots would be
   finer and is a possible later optimisation.
 - `auto_if_match` looks the ETag up by `(resource, record_id, scope, api_version)`, since
-  the record entries of two versions are separate.
+  the record entries of two versions are separate. The lookup runs in a client-owned
+  transport hook after authentication, with the scope of the very token the request is
+  sent with, so the token provider is called once per request (and a retry after a 401
+  looks up again under the refreshed token).
+- `AsyncCacheLayer.aclose` also unbinds the raw send, so a stale hit after close is
+  served without a background refresh.
 - Redis outages degrade to uncached requests silently apart from the log line.
 - `stats_ttl` freshness can serve data up to that long behind without events; callers
   who need otherwise set `stats_ttl=0` in the policy.

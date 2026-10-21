@@ -19,7 +19,7 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from http import HTTPStatus
 from typing import cast
@@ -144,11 +144,30 @@ class _Core:
             return self.bump(state.ctx["resource"])
         return self.generation(state.ctx["resource"])  # `plan` already priced this one in
 
-    def late_deletes(self, state: _State, ops: list[_Op], expected: int) -> list[_Op]:
+    def late_deletes(self, state: _State, ops: list[_Op], expected: int) -> list[_Delete]:
         """Deletes for the entries just stored if an invalidation landed while storing them."""
         if self.generation(state.ctx["resource"]) == expected:
             return []
         return [_Delete(op.key) for op in ops if isinstance(op, _Set)]
+
+    # -- control surface (shared by both layers) -------------------------------------------
+
+    def event_clears(self, resource: str, action: str, record_id: int | None) -> list[str]:
+        """Record an SSE event's invalidation; the prefixes it clears, in every version."""
+        self.bump(resource)
+        return event_prefixes(resource, action, record_id)
+
+    def reset_clears(self, resource: str) -> list[str]:
+        """Record a resource reset (after a reconnect); the prefixes it clears."""
+        self.bump(resource)
+        return resource_prefixes(resource)
+
+    @staticmethod
+    def etag_key(resource: str, record_id: int, scope: str, api_version: str | None) -> str:
+        """Key of a record entry of one API version (``_`` if None), for ``auto_if_match``."""
+        return build_key(
+            resource, "record", record_id, scope, api_version=api_version or UNVERSIONED
+        )
 
     # -- SSE gate ---------------------------------------------------------------------------
 
@@ -375,6 +394,34 @@ class _Core:
         return [_Set(key, new, self._retention(fresh, stale))]
 
 
+def _split(ops: list[_Op]) -> tuple[list[str], list[_Set | _Delete]]:
+    """The prefixes to clear (once, together) and the other ops, in order.
+
+    Clears go first: a write-through `_Set` follows a clear of the same record.
+    """
+    prefixes = list(dict.fromkeys(op.prefix for op in ops if isinstance(op, _Clear)))
+    return prefixes, [op for op in ops if not isinstance(op, _Clear)]
+
+
+def _clear_many(store: CacheStore, prefixes: Sequence[str]) -> None:
+    """One pass over the store when it can (`clear_many`), else a clear per prefix."""
+    many = getattr(store, "clear_many", None)
+    if many is not None:
+        many(prefixes)
+        return
+    for prefix in prefixes:
+        store.clear(prefix)
+
+
+async def _aclear_many(store: AsyncCacheStore, prefixes: Sequence[str]) -> None:
+    many = getattr(store, "clear_many", None)
+    if many is not None:
+        await many(prefixes)
+        return
+    for prefix in prefixes:
+        await store.clear(prefix)
+
+
 def _manifest_resources(body: bytes) -> set[str]:
     try:
         data = json.loads(body)
@@ -440,18 +487,19 @@ class CacheLayer:
             response.read()
         result, ops = self._core.plan(state, request, response)
         expected = self._core.finish(state, ops)
-        for op in ops:
-            self._apply(op)
-        for op in self._core.late_deletes(state, ops, expected):
-            self._apply(op)
+        prefixes, rest = _split(ops)
+        if prefixes:
+            _clear_many(self._store, prefixes)
+        for write in rest:
+            self._apply(write)
+        for late in self._core.late_deletes(state, ops, expected):  # after the stores above
+            self._apply(late)
         if result is not response:
             response.close()
         return result
 
-    def _apply(self, op: _Op) -> None:
-        if isinstance(op, _Clear):
-            self._store.clear(op.prefix)
-        elif isinstance(op, _Set):
+    def _apply(self, op: _Set | _Delete) -> None:
+        if isinstance(op, _Set):
             self._store.set(op.key, op.entry, op.ttl)
         else:
             self._store.delete(op.key)
@@ -468,15 +516,11 @@ class CacheLayer:
 
     def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
         """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
-        self._core.bump(resource)
-        for prefix in event_prefixes(resource, action, record_id):
-            self._store.clear(prefix)
+        _clear_many(self._store, self._core.event_clears(resource, action, record_id))
 
     def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
-        self._core.bump(resource)
-        for prefix in resource_prefixes(resource):
-            self._store.clear(prefix)
+        _clear_many(self._store, self._core.reset_clears(resource))
 
     def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
@@ -486,10 +530,7 @@ class CacheLayer:
         self, resource: str, record_id: int, scope: str, api_version: str | None = None
     ) -> str | None:
         """The stored ETag of a record of one API version (``_`` if None), for ``auto_if_match``."""
-        version = api_version or UNVERSIONED
-        entry = self._store.get(
-            build_key(resource, "record", record_id, scope, api_version=version)
-        )
+        entry = self._store.get(self._core.etag_key(resource, record_id, scope, api_version))
         return None if entry is None else entry.etag
 
 
@@ -521,7 +562,8 @@ class AsyncCacheLayer:
         self._send = cast("SendRaw", send)
 
     async def aclose(self) -> None:
-        """Cancel background revalidations and wait for them to finish."""
+        """Cancel background revalidations and wait; no later hit schedules another (unbinds)."""
+        self._send = None
         tasks = list(self._tasks)
         for task in tasks:
             task.cancel()
@@ -558,18 +600,19 @@ class AsyncCacheLayer:
             await response.aread()
         result, ops = self._core.plan(state, request, response)
         expected = self._core.finish(state, ops)
-        for op in ops:
-            await self._apply(op)
-        for op in self._core.late_deletes(state, ops, expected):
-            await self._apply(op)
+        prefixes, rest = _split(ops)
+        if prefixes:
+            await _aclear_many(self._store, prefixes)
+        for write in rest:
+            await self._apply(write)
+        for late in self._core.late_deletes(state, ops, expected):  # after the stores above
+            await self._apply(late)
         if result is not response:
             await response.aclose()
         return result
 
-    async def _apply(self, op: _Op) -> None:
-        if isinstance(op, _Clear):
-            await self._store.clear(op.prefix)
-        elif isinstance(op, _Set):
+    async def _apply(self, op: _Set | _Delete) -> None:
+        if isinstance(op, _Set):
             await self._store.set(op.key, op.entry, op.ttl)
         else:
             await self._store.delete(op.key)
@@ -622,15 +665,11 @@ class AsyncCacheLayer:
 
     async def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
         """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
-        self._core.bump(resource)
-        for prefix in event_prefixes(resource, action, record_id):
-            await self._store.clear(prefix)
+        await _aclear_many(self._store, self._core.event_clears(resource, action, record_id))
 
     async def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
-        self._core.bump(resource)
-        for prefix in resource_prefixes(resource):
-            await self._store.clear(prefix)
+        await _aclear_many(self._store, self._core.reset_clears(resource))
 
     async def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
@@ -640,8 +679,5 @@ class AsyncCacheLayer:
         self, resource: str, record_id: int, scope: str, api_version: str | None = None
     ) -> str | None:
         """The stored ETag of a record of one API version (``_`` if None), for ``auto_if_match``."""
-        version = api_version or UNVERSIONED
-        entry = await self._store.get(
-            build_key(resource, "record", record_id, scope, api_version=version)
-        )
+        entry = await self._store.get(self._core.etag_key(resource, record_id, scope, api_version))
         return None if entry is None else entry.etag

@@ -3,7 +3,7 @@
 import threading
 import time
 from collections import OrderedDict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 
 from craftainer_crud_sdk.interfaces import CacheEntry
 
@@ -74,6 +74,15 @@ class MemoryStore:
             for key in [k for k in self._data if k.startswith(prefix)]:
                 del self._data[key]
 
+    def clear_many(self, prefixes: Sequence[str]) -> None:
+        """Remove every key starting with any of ``prefixes``, in one pass."""
+        if not prefixes:
+            return
+        wanted = tuple(prefixes)
+        with self._lock:
+            for key in [k for k in self._data if k.startswith(wanted)]:
+                del self._data[key]
+
 
 class AsyncMemoryStore:
     """`AsyncCacheStore` over a `MemoryStore`; nothing blocks, so the methods just delegate."""
@@ -97,3 +106,7 @@ class AsyncMemoryStore:
     async def clear(self, prefix: str | None = None) -> None:
         """Remove every key starting with ``prefix``, or everything."""
         self._store.clear(prefix)
+
+    async def clear_many(self, prefixes: Sequence[str]) -> None:
+        """Remove every key starting with any of ``prefixes``, in one pass."""
+        self._store.clear_many(prefixes)

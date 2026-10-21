@@ -12,7 +12,7 @@ from urllib.parse import urljoin
 
 import httpx2
 
-from craftainer_crud_sdk.auth import BearerAuth, cache_scope
+from craftainer_crud_sdk.auth import BearerAuth, authorization_scope, stamp_scope
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
@@ -57,7 +57,8 @@ class HookedTransport(httpx2.BaseTransport):
 
     `on_request` runs in registration order and the first non-`None` result short-circuits the
     network. `on_response` runs in reverse, for the hooks whose `on_request` ran before the
-    short-circuiting one (all of them for a network response).
+    short-circuiting one (all of them for a network response). Before any hook runs, the request
+    context's cache scope is set from the Authorization header the request actually carries.
     """
 
     def __init__(self, inner: httpx2.BaseTransport, hooks: Sequence[TransportHook]) -> None:
@@ -87,6 +88,7 @@ class HookedTransport(httpx2.BaseTransport):
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         """Run the hooks around the inner transport."""
+        stamp_scope(request)  # the scope of the Authorization header actually on the wire
         ran: list[TransportHook] = []
         response: httpx2.Response | None = None
         for hook in self._hooks:
@@ -137,6 +139,7 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Run the hooks around the inner transport."""
+        stamp_scope(request)
         ran: list[AsyncTransportHook] = []
         response: httpx2.Response | None = None
         for hook in self._hooks:
@@ -162,18 +165,76 @@ class _Call:
     context: RequestContext
     json: object | None = None
     headers: Mapping[str, str] | None = None
+    auto_if_match: bool = False  # `If-Match` is looked up after authentication, if a lookup is set
+
+
+_AUTO_IF_MATCH = "craftainer_auto_if_match"
+"""Request extension: the request wants the looked-up ETag as `If-Match` (set by `_build`)."""
 
 
 def _build(http: httpx2.Client | httpx2.AsyncClient, call: _Call) -> httpx2.Request:
     headers = {"Accept": "application/json", **(call.headers or {})}
-    # `build_request` keeps the context dict by reference, so `BearerAuth` can fill the scope.
+    # `build_request` keeps the context dict by reference, so the transport can fill the scope.
+    extensions: dict[str, object] = {EXTENSION_KEY: call.context}
+    if call.auto_if_match:
+        extensions[_AUTO_IF_MATCH] = True
     return http.build_request(
-        call.method,
-        call.url,
-        json=call.json,
-        headers=headers,
-        extensions={EXTENSION_KEY: call.context},
+        call.method, call.url, json=call.json, headers=headers, extensions=extensions
     )
+
+
+class _IfMatchHook:
+    """Sync transport hook: sets `If-Match` from the etag lookup once the request is authenticated.
+
+    It runs below the auth flow, so the scope it looks up is the one of the very token the request
+    carries (one provider call per request; a retry after a 401 looks up again).
+    """
+
+    def __init__(self) -> None:
+        self.lookup: Callable[[str, int, str, str | None], str | None] | None = None
+
+    def on_request(self, request: httpx2.Request) -> httpx2.Response | None:
+        if self.lookup is not None and request.extensions.get(_AUTO_IF_MATCH):
+            ctx = cast("RequestContext", request.extensions[EXTENSION_KEY])
+            etag = self.lookup(
+                cast("str", ctx["resource"]),
+                cast("int", ctx["record_id"]),
+                ctx["scope"],
+                ctx["api_version"],
+            )
+            request.headers.pop("If-Match", None)
+            if etag is not None:
+                request.headers["If-Match"] = etag
+        return None
+
+    def on_response(self, request: httpx2.Request, response: httpx2.Response) -> httpx2.Response:
+        return response
+
+
+class _AsyncIfMatchHook:
+    """Async twin of `_IfMatchHook`."""
+
+    def __init__(self) -> None:
+        self.lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None = None
+
+    async def on_request(self, request: httpx2.Request) -> httpx2.Response | None:
+        if self.lookup is not None and request.extensions.get(_AUTO_IF_MATCH):
+            ctx = cast("RequestContext", request.extensions[EXTENSION_KEY])
+            etag = await self.lookup(
+                cast("str", ctx["resource"]),
+                cast("int", ctx["record_id"]),
+                ctx["scope"],
+                ctx["api_version"],
+            )
+            request.headers.pop("If-Match", None)
+            if etag is not None:
+                request.headers["If-Match"] = etag
+        return None
+
+    async def on_response(
+        self, request: httpx2.Request, response: httpx2.Response
+    ) -> httpx2.Response:
+        return response
 
 
 def _checked(response: httpx2.Response) -> httpx2.Response:
@@ -223,7 +284,8 @@ class _Plan:
             scope="anon",
         )
         headers = {"If-Match": if_match} if if_match is not None else None
-        return _Call(method, url, context, json, headers)
+        auto = if_match is None and op in {"update", "delete"}
+        return _Call(method, url, context, json, headers, auto_if_match=auto)
 
     def _query(self, **kwargs: Unpack[_QueryArgs]) -> str:
         paging = self.resource.pagination
@@ -429,11 +491,9 @@ class ResourceClient(_Plan):
     ) -> JsonObject:
         """Patch one record; `if_match` is an ETag (`412` when stale).
 
-        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
+        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any
+        (looked up for the very token the request is sent with).
         """
-        if_match = self._client.resolve_if_match(
-            self.resource.name, self.resource.api_version, record_id, if_match
-        )
         return self._client.send_object(self.update_call(record_id, data, if_match))
 
     def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
@@ -442,9 +502,6 @@ class ResourceClient(_Plan):
 
     def delete(self, record_id: int, if_match: str | None = None) -> None:
         """Delete one record; `if_match` as for `update`."""
-        if_match = self._client.resolve_if_match(
-            self.resource.name, self.resource.api_version, record_id, if_match
-        )
         self._client.send_none(self.delete_call(record_id, if_match))
 
     def delete_many(self, filters: Filters) -> JsonObject:
@@ -492,6 +549,10 @@ class ResourceClient(_Plan):
         return self._client.send_list(self.revisions_call(record_id))
 
 
+def _bearer(token: str | None) -> str | None:
+    return None if token is None else f"Bearer {token}"
+
+
 class CrudClient:
     """Synchronous client: discovers the manifest, hands out `ResourceClient`s."""
 
@@ -523,7 +584,7 @@ class CrudClient:
             timeout=timeout,
             headers=headers,
         )
-        self._etag_lookup: Callable[[str, int, str, str | None], str | None] | None = None
+        self._if_match = _IfMatchHook()
         self._closers: list[tuple[Callable[[], None], Callable[[], None]]] = []
 
     @property
@@ -543,21 +604,21 @@ class CrudClient:
     def scope(self) -> str:
         """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
         provider = self._token_provider
-        return cache_scope(None if provider is None else provider())
+        if provider is None:
+            return authorization_scope(self._http.headers.get("Authorization"))
+        return authorization_scope(_bearer(provider()))
 
     def set_etag_lookup(
         self, lookup: Callable[[str, int, str, str | None], str | None] | None
     ) -> None:
-        """Make `update`/`delete` send `lookup(resource, id, scope, version)` as `If-Match`."""
-        self._etag_lookup = lookup
+        """Make `update`/`delete` send `lookup(resource, id, scope, version)` as `If-Match`.
 
-    def resolve_if_match(
-        self, resource: str, api_version: str, record_id: int, if_match: str | None
-    ) -> str | None:
-        """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
-        if if_match is not None or self._etag_lookup is None:
-            return if_match
-        return self._etag_lookup(resource, record_id, self.scope(), api_version)
+        The lookup runs once per request, after authentication, with the scope of the token the
+        request is actually sent with.
+        """
+        if lookup is not None and self._if_match not in self._transport.hooks:
+            self._transport.add_hook(self._if_match)
+        self._if_match.lookup = lookup
 
     def add_closer(self, close: Callable[[], None], join: Callable[[], None]) -> None:
         """Run `close` when the client closes, then close HTTP, then `join` (wait for threads)."""
@@ -683,11 +744,9 @@ class AsyncResourceClient(_Plan):
     ) -> JsonObject:
         """Patch one record; `if_match` is an ETag (`412` when stale).
 
-        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
+        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any
+        (looked up for the very token the request is sent with).
         """
-        if_match = await self._client.resolve_if_match(
-            self.resource.name, self.resource.api_version, record_id, if_match
-        )
         return await self._client.send_object(self.update_call(record_id, data, if_match))
 
     async def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
@@ -696,9 +755,6 @@ class AsyncResourceClient(_Plan):
 
     async def delete(self, record_id: int, if_match: str | None = None) -> None:
         """Delete one record; `if_match` as for `update`."""
-        if_match = await self._client.resolve_if_match(
-            self.resource.name, self.resource.api_version, record_id, if_match
-        )
         await self._client.send_none(self.delete_call(record_id, if_match))
 
     async def delete_many(self, filters: Filters) -> JsonObject:
@@ -774,9 +830,7 @@ class AsyncCrudClient:
             timeout=timeout,
             headers=headers,
         )
-        self._etag_lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None = (
-            None
-        )
+        self._if_match = _AsyncIfMatchHook()
         self._closers: list[Callable[[], Awaitable[None]]] = []
 
     @property
@@ -797,23 +851,21 @@ class AsyncCrudClient:
         """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
         provider = self._token_provider
         if provider is None:
-            return cache_scope(None)
+            return authorization_scope(self._http.headers.get("Authorization"))
         token = provider()
-        return cache_scope(await token if inspect.isawaitable(token) else token)
+        return authorization_scope(_bearer(await token if inspect.isawaitable(token) else token))
 
     def set_etag_lookup(
         self, lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None
     ) -> None:
-        """Make `update`/`delete` send `await lookup(resource, id, scope, version)` as If-Match."""
-        self._etag_lookup = lookup
+        """Make `update`/`delete` send `await lookup(resource, id, scope, version)` as If-Match.
 
-    async def resolve_if_match(
-        self, resource: str, api_version: str, record_id: int, if_match: str | None
-    ) -> str | None:
-        """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
-        if if_match is not None or self._etag_lookup is None:
-            return if_match
-        return await self._etag_lookup(resource, record_id, await self.scope(), api_version)
+        The lookup runs once per request, after authentication, with the scope of the token the
+        request is actually sent with.
+        """
+        if lookup is not None and self._if_match not in self._transport.hooks:
+            self._transport.add_hook(self._if_match)
+        self._if_match.lookup = lookup
 
     def add_closer(self, close: Callable[[], Awaitable[None]]) -> None:
         """Await `close` when the client closes, before the HTTP client is closed."""

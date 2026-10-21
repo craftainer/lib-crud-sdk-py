@@ -122,6 +122,12 @@ BAD: list[Callable[[dict[str, Any]], object]] = [
     lambda d: d.update(manifest_version=1),
     lambda d: d["resources"][0].pop("name"),
     lambda d: d["resources"][0].update(name=True),
+    lambda d: d["resources"][0].update(api_version="2"),
+    lambda d: d["resources"][0].update(api_version="V2"),
+    lambda d: d["resources"][0].update(api_version="v"),
+    lambda d: d["resources"][0].update(api_version="v1.0"),
+    lambda d: d["resources"][0].update(api_version="v2\n"),
+    lambda d: d["resources"][0].update(api_version="v\u0663"),
     lambda d: d["resources"][0]["fields"][0].update(filter_ops=[1]),
     lambda d: d["resources"][0]["fields"][0].update(filter_ops="eq"),
     lambda d: d["resources"][0]["capabilities"].update(stats="yes"),
@@ -248,3 +254,20 @@ async def test_async_load_failures() -> None:
     async with httpx2.AsyncClient(transport=_failing(None, "<html>")) as http:
         with pytest.raises(ManifestError, match="not JSON"):
             await aload_manifest(http, BASE)
+
+
+def test_find_orders_versions_numerically_without_int_limits() -> None:
+    """A schema-valid, absurdly long version neither raises nor outranks a larger number."""
+    doc = load_doc()
+    template = doc["resources"][0]
+    versions = ["v2", "v10", "v" + "9" * 5000, "v0001"]
+    doc["resources"] = [dict(template, name="same", api_version=v) for v in versions]
+    manifest = parse_manifest(doc)
+    found = manifest.find("same")
+    assert found is not None
+    assert found.api_version == "v" + "9" * 5000
+    assert manifest.find("same", "v10") is not None
+    doc["resources"] = [dict(template, name="same", api_version=v) for v in ("v2", "v10", "v9")]
+    latest = parse_manifest(doc).find("same")
+    assert latest is not None
+    assert latest.api_version == "v10"

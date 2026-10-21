@@ -1,6 +1,7 @@
 """Memory and Redis stores."""
 
 import logging
+from unittest.mock import Mock
 
 import fakeredis
 import fakeredis.aioredis
@@ -214,3 +215,92 @@ async def test_async_redis_outage_and_corruption(caplog: pytest.LogCaptureFixtur
     with caplog.at_level(logging.WARNING):
         assert await AsyncRedisStore(client).get("k") is None
     assert "corrupt" in caplog.text
+
+
+def test_memory_clear_many_is_one_pass_over_all_prefixes() -> None:
+    """Memory clear many removes every key under any prefix and keeps the rest."""
+    store = MemoryStore()
+    for key in ("a/1", "a/2", "b/1", "c/1"):
+        store.set(key, make_entry())
+    store.clear_many([])
+    assert len(store) == 4
+    store.clear_many(["a/", "b/"])
+    assert store.get("a/1") is None
+    assert store.get("b/1") is None
+    assert store.get("c/1") is not None
+
+
+@pytest.mark.asyncio
+async def test_async_memory_clear_many() -> None:
+    """Async memory clear many delegates."""
+    store = AsyncMemoryStore()
+    await store.set("a/1", make_entry())
+    await store.set("c/1", make_entry())
+    await store.clear_many(["a/", "z/"])
+    assert await store.get("a/1") is None
+    assert await store.get("c/1") is not None
+
+
+@pytest.mark.parametrize("decode", [False, True])
+def test_redis_clear_many_scans_once(decode: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Redis clear many: one SCAN pass, every prefix tested, other keys untouched."""
+    monkeypatch.setattr(redis_store, "_BATCH", 1000)
+    prefixes = ["v1/r/list/", "v1/r/stats/", "v1/r/record/1/"]
+    keys = ("v1/r/list/1", "v1/r/list/2", "v1/r/stats/1", "v1/r/record/1/x", "v1/r/filters/1")
+    client = fakeredis.FakeRedis(decode_responses=decode)
+    scan = Mock(wraps=client.scan)
+    monkeypatch.setattr(client, "scan", scan)
+    client.set("other:v1/r/list/x", "keep")
+    store = RedisStore(client, namespace="ns:")
+    for key in keys:
+        store.set(key, make_entry())
+    store.clear_many([])  # nothing to do
+    scan.assert_not_called()
+    store.clear_many(prefixes)
+    one_pass = scan.call_count
+    assert store.get("v1/r/list/1") is None
+    assert store.get("v1/r/list/2") is None
+    assert store.get("v1/r/stats/1") is None
+    assert store.get("v1/r/record/1/x") is None
+    assert store.get("v1/r/filters/1") is not None
+    assert client.get("other:v1/r/list/x") is not None
+    for key in keys:
+        store.set(key, make_entry())
+    scan.reset_mock()
+    for prefix in prefixes:
+        store.clear(prefix)
+    assert one_pass * len(prefixes) <= scan.call_count
+
+
+def test_redis_clear_many_outage_is_a_warning(caplog: pytest.LogCaptureFixture) -> None:
+    """Redis clear many never raises on an outage."""
+    store = RedisStore(Failing())
+    with caplog.at_level(logging.WARNING):
+        store.clear_many(["p/", "q/"])
+    assert "redis clear failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_redis_clear_many(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    """Async redis clear many: batches, one pass, outage is a warning."""
+    monkeypatch.setattr(redis_store, "_BATCH", 2)
+    client = fakeredis.aioredis.FakeRedis()
+    await client.set("other:v1/r/list/x", "keep")
+    store = AsyncRedisStore(client, namespace="ns:")
+    for i in range(5):
+        await store.set(f"v1/r/list/{i}", make_entry())
+    await store.set("v1/r/stats/1", make_entry())
+    await store.set("v1/r/filters/1", make_entry())
+    await store.clear_many([])
+    assert await store.get("v1/r/list/0") is not None
+    await store.clear_many(["v1/r/list/", "v1/r/stats/"])
+    assert await store.get("v1/r/list/4") is None
+    assert await store.get("v1/r/stats/1") is None
+    assert await store.get("v1/r/filters/1") is not None
+    assert await client.get("other:v1/r/list/x") == b"keep"
+    await client.aclose()
+    with caplog.at_level(logging.WARNING):
+        await AsyncRedisStore(AsyncFailing()).clear_many(["p/"])
+    assert "redis clear failed" in caplog.text

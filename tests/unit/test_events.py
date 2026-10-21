@@ -626,3 +626,119 @@ async def test_async_non_http_error_closes_the_gate_and_resubscribe_restarts(
     await sub.aclose()
     assert not layer.events_active("heroes")
     await client.aclose()
+
+
+def test_subscribe_while_the_last_reader_is_stopping_gets_a_live_reader() -> None:
+    """A subscribe between the last unsubscribe and the old thread's exit starts a new stream."""
+    release_old, release_new = threading.Event(), threading.Event()
+    script = Script(open_stream(Gate(release_old, "old")), open_stream(Gate(release_new, "new")))
+    sub = sync_subscriber(script)
+    first_up = threading.Event()
+    unsubscribe = sub.subscribe(lambda e: None, on_status=lambda ok: first_up.set() if ok else None)
+    assert first_up.wait(5)
+    old = sub._thread
+    assert old is not None
+    unsubscribe()  # the old reader is stuck in its stream and has not exited yet
+    assert old.is_alive()
+
+    ups: list[bool] = []
+    second_up = threading.Event()
+
+    def on_status(ok: bool) -> None:
+        """Record."""
+        ups.append(ok)
+        if ok:
+            second_up.set()
+
+    sub.subscribe(lambda e: None, on_status=on_status)
+    assert sub._thread is not old
+    assert second_up.wait(5)
+    release_old.set()
+    old.join(5)
+    assert not old.is_alive()
+    assert sub._thread is not None
+    assert sub._thread.is_alive()  # the old reader's cleanup did not clear the new one
+    assert sub._connected
+    assert ups == [True]  # nor flip the status
+    assert len(script.requests) == 2
+    release_new.set()
+    sub.close()
+
+
+@pytest.mark.asyncio
+async def test_async_subscribe_while_the_last_reader_is_stopping_gets_a_live_reader() -> None:
+    """The async twin: cancel is not exit, a subscribe in between still gets a stream."""
+    script = Script(open_stream(AsyncGate("old")), open_stream(AsyncGate("new")))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS)
+    ups: list[bool] = []
+
+    async def ignore(e: CrudEvent) -> None:
+        """Ignore."""
+
+    async def on_status(ok: bool) -> None:
+        """Record."""
+        ups.append(ok)
+
+    first = sub.subscribe(ignore, on_status=on_status)
+    await asyncio.sleep(0.01)
+    old = task_of(sub)
+    first()
+    assert old is not None
+    ups.clear()
+    sub.subscribe(ignore, on_status=on_status)  # before the cancelled task has run again
+    await asyncio.sleep(0.05)
+    assert old.done()
+    new = task_of(sub)
+    assert new is not None
+    assert new is not old
+    assert not new.done()
+    assert len(script.requests) == 2
+    assert ups == [True]
+    await sub.aclose()
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_listener_joining_a_connected_stream_gets_status_true() -> None:
+    """As with the sync subscriber, a late listener learns that the stream is already up."""
+    script = Script(open_stream(AsyncGate("s1")))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS)
+    early: list[bool] = []
+    late: list[bool] = []
+
+    async def ignore(e: CrudEvent) -> None:
+        """Ignore."""
+
+    async def on_early(ok: bool) -> None:
+        """Record."""
+        early.append(ok)
+
+    async def on_late(ok: bool) -> None:
+        """Record."""
+        late.append(ok)
+
+    sub.subscribe(ignore, on_status=on_early)
+    await asyncio.sleep(0.01)
+    assert early == [True]
+    leave = sub.subscribe(ignore, on_status=on_late)
+    await asyncio.sleep(0.01)
+    assert late == [True]
+    quick = sub.subscribe(ignore, on_status=on_late)
+    quick()  # gone before its notification ran: no call
+    sub.subscribe(ignore)  # a listener without on_status joins quietly
+    leave()
+    await asyncio.sleep(0.01)
+    assert late == [True]
+    await sub.aclose()
+    await client.aclose()
+
+
+def test_a_reader_stopped_before_its_response_is_published_publishes_nothing() -> None:
+    """A replaced or stopped reader that just connected leaves without touching the state."""
+    sub = sync_subscriber(Script(open_stream(Gate(threading.Event()))))
+    stopped = threading.Event()
+    stopped.set()
+    sub._read_once(stopped)
+    assert sub._response is None

@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+from collections.abc import Sequence
 
 import httpx2
 import pytest
@@ -266,3 +267,60 @@ async def test_async_invalidation_during_the_store_drops_the_new_entry(
     monkeypatch.setattr(layer._store, "set", set_then_invalidate)
     await layer.on_response(request, response)
     assert len(store) == 0
+
+
+async def test_async_events_walk_the_store_once_and_plain_stores_work() -> None:
+    """The async layer batches clears too, and falls back for a store without clear_many."""
+    calls: list[list[str]] = []
+
+    class Counting(AsyncMemoryStore):
+        """Records clear_many."""
+
+        async def clear_many(self, prefixes: Sequence[str]) -> None:
+            """Record."""
+            calls.append(list(prefixes))
+            await super().clear_many(prefixes)
+
+    layer = AsyncCacheLayer(Counting(), {"heroes": POLICY})
+    await layer.invalidate_event("heroes", "delete", 4)
+    await layer.clear_resource("heroes")
+    assert len(calls) == 2
+    assert "v1/heroes/revisions/4/" in calls[0]
+
+    class Plain:
+        """Only the four protocol methods."""
+
+        def __init__(self) -> None:
+            """Create it."""
+            self.cleared: list[str | None] = []
+
+        async def get(self, key: str) -> CacheEntry | None:
+            """Miss."""
+            return None
+
+        async def set(self, key: str, entry: CacheEntry, ttl: float | None = None) -> None:
+            """Ignore."""
+
+        async def delete(self, key: str) -> None:
+            """Ignore."""
+
+        async def clear(self, prefix: str | None = None) -> None:
+            """Record."""
+            self.cleared.append(prefix)
+
+    plain = Plain()
+    layer = AsyncCacheLayer(plain, {"heroes": POLICY})
+    await layer.invalidate_event("heroes", "create", None)
+    assert plain.cleared == ["v1/heroes/list/", "v1/heroes/stats/", "v1/heroes/predict/"]
+
+
+async def test_a_stale_hit_after_aclose_schedules_no_revalidation() -> None:
+    """aclose unbinds the raw send: the stale entry is served, nothing is refreshed."""
+    runner, server, _, layer, clock = setup()
+    await runner.send(make_request())
+    clock.now += 100  # inside the SWR window
+    await layer.aclose()
+    stale = await runner.send(make_request())
+    assert status_of(stale) == "revalidated"  # no SWR any more: plain revalidation
+    assert not layer._tasks
+    assert len(server.calls) == 2
