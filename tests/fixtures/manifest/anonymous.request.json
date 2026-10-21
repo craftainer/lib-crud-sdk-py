@@ -1,0 +1,7 @@
+{
+  "description": "An unauthenticated caller sees only public resources.",
+  "method": "GET",
+  "path": "/api/_crud/manifest",
+  "authenticated": false,
+  "roles": []
+}

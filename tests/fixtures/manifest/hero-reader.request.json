@@ -1,0 +1,9 @@
+{
+  "description": "A reader of one resource sees it plus the public ones.",
+  "method": "GET",
+  "path": "/api/_crud/manifest",
+  "authenticated": true,
+  "roles": [
+    "hero-reader"
+  ]
+}

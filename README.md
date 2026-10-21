@@ -1,53 +1,104 @@
-# template-python-package
+# craftainer-crud-sdk
 
 > [!NOTE]
 > This repository is vibe coded with [Claude](https://claude.com/product/claude-code).
 
-A template for a typed, tested, benchmarked and publishable Python library:
-`src/` layout with a `py.typed` marker, hatchling build, `uv`, strict `ruff`
-and `mypy`, `pytest` with a 100% coverage gate, `import-linter`,
-`pip-audit`, per-PR CodSpeed benchmarks, and a release that publishes to
-PyPI through trusted publishing. It is itself an instance of
-[`template-base`](https://github.com/craftainer/template-base) (so it gets the
-devcontainer, CI, release workflow and template sync from there) and is
-itself a template: a package created from it receives fixes through template
-sync. See [`docs/TEMPLATE.md`](docs/TEMPLATE.md) for the conventions shared
-by every instance, and
-[`docs/adrs/0001-python-package-template.md`](docs/adrs/0001-python-package-template.md)
-for why it exists.
+Python client SDK for craftainer-crud APIs, built on
+[`httpx2`](https://pypi.org/project/httpx2/): sync and async clients,
+HTTP caching with pluggable stores, and server-sent events. Import name:
+`craftainer_crud_sdk`; requires Python 3.14+.
 
-## Creating a package from this template
+```sh
+pip install craftainer-crud-sdk            # in-memory cache only
+pip install "craftainer-crud-sdk[redis]"   # adds the Redis cache store
+```
 
-1. On GitHub, use "Use this template" on this repository (or
-   `gh repo create <org>/<name> --template craftainer/template-python-package`).
-2. Rename the distribution and the import package. Three names move
-   together:
-   - `pyproject.toml`: `[project] name` (`template-python-package`), the
-     description, the import-linter `root_packages`/contract modules and
-     any `--cov=src/template_python_package` setting;
-   - `src/template_python_package/` to `src/<your_import_name>/`, and every
-     `template_python_package` import in `tests/`;
-   - this file's title and description.
+It is an instance of
+[`template-python-package`](https://github.com/craftainer/template-python-package)
+(see [`docs/TEMPLATE.md`](docs/TEMPLATE.md) for the conventions shared by
+every instance). The cross-module contracts live in
+`src/craftainer_crud_sdk/interfaces.py`.
 
-   Then run `uv lock` to refresh `uv.lock` for the new name.
-3. Point template sync at this template. `.github/template-sync-state.json`
-   here records the `template-base` tag this template itself last synced
-   from; the copy in a new package must instead name this repository and
-   the tag it was created at (the latest release of
-   `craftainer/template-python-package`):
+## Quick start
 
-   ```json
-   {"template_repo": "craftainer/template-python-package", "synced_tag": "vX.Y.Z"}
-   ```
+```python
+from craftainer_crud_sdk import CachePolicy, CrudClient, MemoryStore, enable_cache, static_token
 
-   Add a `TEMPLATE_SYNC_TOKEN` secret too (see `.github/workflows/README.md`,
-   "Template sync"). Files the package owns beyond the manifest's `ignore`
-   tier (extra `scripts/post-create.d/` hooks, for instance) go in
-   `.github/template-sync-manifest.local.yml` under `ignore:`.
-4. Open the repository in the devcontainer, then run
-   `prek run --all-files --hook-stage manual`; everything should pass before
-   you write any code.
-5. Keep `LICENSE` (GPL-3.0) or replace it with the license you choose.
+with CrudClient("https://api.example.com", token_provider=static_token("<jwt>")) as client:
+    # Discovery: GET /.well-known/api-catalog -> manifest, loaded on first use.
+    print([r.name for r in client.manifest().resources])
+    heroes = client.resource("heroes")
+
+    # A list query, validated against the manifest (filter ops, sortable fields) before sending.
+    strong = heroes.list(
+        {"power_level__min": 10, "name__icontains": "a"}, sort="-power_level", limit=20
+    )
+    everyone = list(heroes.iter_all(sort="name"))  # pages with skip += limit
+
+    # Opt in to caching: policies come from the manifest `cache` hints, the layer is installed as
+    # a transport hook, and one SSE stream per resource invalidates it on every change.
+    layer = enable_cache(
+        client,
+        MemoryStore(max_entries=1024),
+        overrides={"heroes": CachePolicy(max_age=60)},  # fresh hits, only while the stream is up
+        auto_if_match=True,  # update/delete send the cached ETag
+    )
+    heroes.list()  # network
+    heroes.list()  # no request: fresh, and the event stream is connected
+    heroes.update(1, {"name": "Grace"})  # writes through to the record entry, clears the lists
+# leaving the block stops the event streams
+```
+
+The async client is the same with `await`: `AsyncCrudClient`, `AsyncMemoryStore` and
+`await aenable_cache(client, store, ...)`; closing it (`async with` / `await client.aclose()`)
+cancels the event tasks and the layer's background revalidations.
+
+`enable_cache(client, store, *, resources=None, overrides=None, events=True,
+auto_if_match=False)` caches every resource in the manifest unless `resources` names some;
+`overrides` maps a resource name to a `CachePolicy` that replaces its manifest default;
+`events=False` skips the SSE streams (every read then revalidates); `auto_if_match=True` makes
+`update`/`delete` without `if_match` send the cached record ETag, so a stale write is a
+`PreconditionFailed` (`412`) and evicts the record. It is a function, not a client method,
+because the import contract keeps `client` and `events` independent of each other. It returns the
+layer, whose `clear`, `cached_etag` and `events_active` stay available.
+
+## Caching
+
+Caching is opt-in per resource and is a transport hook, so it works the same for the
+sync and async clients. A `CachePolicy` is defaulted from the manifest `cache` hints
+(`CachePolicy.from_manifest(resource_dict)`; `enable_cache` does this for you) and any field can
+be overridden. (`Resource.cache` is the raw `CacheHints` of the manifest, not a policy.)
+
+```python
+from craftainer_crud_sdk import CacheLayer, CachePolicy, MemoryStore
+
+# Hand wiring, when `enable_cache` is not enough (`heroes` is the manifest resource dict):
+layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_manifest(heroes)})
+```
+
+- By default every reuse is revalidated with `If-None-Match`; a `304` serves the stored
+  body with merged headers. Only `GET` `200` JSON is stored, never `no-store`.
+- `max_age > 0` (fresh hits) and `stale_while_revalidate` (async only) take effect only
+  while the resource's SSE stream is connected, because events are what end freshness
+  early (also for `stats`/`predict`, whose `stale_while_revalidate` needs the stream; their
+  `stats_ttl` freshness does not). Wire a stream with `invalidate_on_events(layer, subscriber, "heroes")`
+  (`EventSubscriber` / `AsyncEventSubscriber`).
+  `stats` and `predict` use `stats_ttl` and need no stream.
+- Events clear cached prefixes; the first handshake of a stream and every reconnect clear
+  the resource. A successful write
+  updates or clears what it changed (`PATCH` writes its response through as the record
+  entry), and a `412` evicts the record.
+- Stores: `MemoryStore` (LRU plus TTL) and, with the `redis` extra,
+  `craftainer_crud_sdk.cache.redis.RedisStore` / `AsyncRedisStore`. A Redis outage is a
+  cache miss and a logged warning. Cache keys carry no server identity: a store shared
+  between servers or environments must use a per-origin namespace (for `RedisStore`, its
+  `namespace` argument, which must not be empty).
+- `filters` always revalidate. The freshness gate is counted per resource, so several
+  streams of one resource keep it open until the last is gone. `enable_cache` builds a
+  policy per resource name and `api_version` from each manifest entry.
+
+The design and its reasons are in
+[`docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md).
 
 ## Publishing to PyPI
 

@@ -1,0 +1,9 @@
+{
+  "description": "An admin sees every resource, ordered by name then api_version.",
+  "method": "GET",
+  "path": "/api/_crud/manifest",
+  "authenticated": true,
+  "roles": [
+    "admin"
+  ]
+}
