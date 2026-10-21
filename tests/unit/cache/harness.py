@@ -38,6 +38,7 @@ def make_request(  # noqa: PLR0913  # a request is described by this many indepe
     headers: dict[str, str] | None = None,
     scope: str = "anon",
     context: bool = True,
+    api_version: str | None = None,
 ) -> httpx2.Request:
     """Make request."""
     url = "http://t/api/heroes" + (f"?{query}" if query else "")
@@ -47,6 +48,7 @@ def make_request(  # noqa: PLR0913  # a request is described by this many indepe
             "resource": resource,
             "op": op,
             "record_id": record_id,
+            "api_version": api_version,
             "scope": scope,
         }
         extensions[EXTENSION_KEY] = ctx

@@ -177,3 +177,18 @@ def test_encode_params_and_format_scalar() -> None:
     """Test encode params and format scalar."""
     assert encode_params([("a b", "c~d"), ("e", "f/g")]) == "a%20b=c~d&e=f%2Fg"
     assert format_scalar(_field("n", "integer", ("eq",)), 3) == "3"
+
+
+def test_paging_parameter_names_are_configurable() -> None:
+    """Skip, limit and sort take their names from the caller; `id` stays `id`."""
+    query = build_query(
+        ALL,
+        record_id=1,
+        sort="name",
+        skip=2,
+        limit=3,
+        skip_param="offset",
+        limit_param="page_size",
+        sort_param="order",
+    )
+    assert query == "id=1&order=name&offset=2&page_size=3"

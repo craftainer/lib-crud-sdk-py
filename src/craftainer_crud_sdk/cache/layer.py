@@ -17,6 +17,7 @@ Freshness beyond "revalidate every time" is granted only while the resource's SS
 import asyncio
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -37,6 +38,7 @@ from craftainer_crud_sdk.cache.entry import (
 from craftainer_crud_sdk.cache.keys import (
     KINDS,
     STATS_KINDS,
+    UNVERSIONED,
     build_key,
     event_prefixes,
     kind_prefix,
@@ -99,6 +101,8 @@ class _State:
     policy: CachePolicy
     kind: str | None  # cache kind of a read; None for a write
     key: str | None
+    api_version: str  # `RequestContext.api_version`, `_` when None
+    generation: int  # the resource's invalidation count when the request was made
     entry: CacheEntry | None = None
     force_revalidate: bool = False
     validated: bool = False
@@ -118,6 +122,33 @@ class _Core:
         self.cache_manifest = cache_manifest
         self.clock = clock
         self._events_active: set[str] = set()
+        self._lock = threading.Lock()
+        self._generations: dict[str, int] = {}
+
+    # -- invalidation generations ----------------------------------------------------------
+
+    def generation(self, resource: str | None) -> int:
+        """How many invalidations of ``resource`` have landed so far."""
+        return self._generations.get(resource or "", 0)
+
+    def bump(self, resource: str | None) -> int:
+        """Record an invalidation of ``resource``; returns the new generation."""
+        with self._lock:
+            generation = self._generations.get(resource or "", 0) + 1
+            self._generations[resource or ""] = generation
+            return generation
+
+    def finish(self, state: _State, ops: list[_Op]) -> int:
+        """Before applying ``ops``: bump if a write clears; return the generation expected after."""
+        if state.kind is None and any(isinstance(op, _Clear) for op in ops):
+            return self.bump(state.ctx["resource"])
+        return self.generation(state.ctx["resource"])  # `plan` already priced this one in
+
+    def late_deletes(self, state: _State, ops: list[_Op], expected: int) -> list[_Op]:
+        """Deletes for the entries just stored if an invalidation landed while storing them."""
+        if self.generation(state.ctx["resource"]) == expected:
+            return []
+        return [_Delete(op.key) for op in ops if isinstance(op, _Set)]
 
     # -- SSE gate ---------------------------------------------------------------------------
 
@@ -137,12 +168,14 @@ class _Core:
         if ctx is None:
             return None
         resource = ctx["resource"]
+        version = ctx["api_version"] or UNVERSIONED
+        generation = self.generation(resource)
         if request.method != "GET":
             policy = self.policies.get(resource) if resource else None
             if policy is None or not policy.enabled:
                 return None
-            return _State(ctx, policy, None, None)
-        target = self._read_target(request, ctx)
+            return _State(ctx, policy, None, None, version, generation)
+        target = self._read_target(request, ctx, version)
         if target is None:
             return None
         policy, kind, key = target
@@ -152,10 +185,12 @@ class _Core:
             request.headers.pop("if-none-match", None)  # our own validator, on a retry
         if "no-store" in control or "if-none-match" in request.headers:
             return None  # the caller manages validators or forbids storing
-        return _State(ctx, policy, kind, key, force_revalidate="no-cache" in control)
+        return _State(
+            ctx, policy, kind, key, version, generation, force_revalidate="no-cache" in control
+        )
 
     def _read_target(
-        self, request: httpx2.Request, ctx: RequestContext
+        self, request: httpx2.Request, ctx: RequestContext, version: str
     ) -> tuple[CachePolicy, str, str] | None:
         """Policy, cache kind and key of a cacheable read, or ``None``."""
         resource = ctx["resource"]
@@ -167,24 +202,30 @@ class _Core:
         found = self.policies.get(resource) if resource else None
         if found is None or not found.enabled or op not in KINDS or resource is None:
             return None
-        key = build_key(resource, op, ctx["record_id"], ctx["scope"], request.url.query)
+        key = build_key(
+            resource, op, ctx["record_id"], ctx["scope"], request.url.query, api_version=version
+        )
         return found, op, key
 
-    def _gate_open(self, state: _State) -> bool:
-        resource = state.ctx["resource"]
-        if state.kind in STATS_KINDS:
-            return True
-        return resource is not None and state.kind != "manifest" and resource in self._events_active
+    def _gate_open(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
+        """Whether an entry of ``kind`` may be fresh (or stale-while-revalidate) right now."""
+        if policy.revalidate_only or kind == "manifest":
+            return False
+        return kind in STATS_KINDS or (resource is not None and resource in self._events_active)
 
     def _times(self, policy: CachePolicy, resource: str | None, kind: str) -> tuple[float, float]:
         """Seconds fresh and seconds of stale-while-revalidate granted to a new entry."""
-        open_ = kind in STATS_KINDS or (
-            kind != "manifest" and resource is not None and resource in self._events_active
-        )
-        if not open_:
+        if not self._gate_open(policy, resource, kind):
             return 0.0, 0.0
         fresh = policy.stats_ttl if kind in STATS_KINDS else policy.max_age
         return fresh, policy.stale_while_revalidate
+
+    def _entry_times(self, state: _State, kind: str) -> tuple[float, float]:
+        """`_times` for a response; none if an invalidation landed while it was in flight."""
+        resource = state.ctx["resource"]
+        if self.generation(resource) != state.generation:
+            return 0.0, 0.0  # at most revalidate-only: the body may predate the invalidation
+        return self._times(state.policy, resource, kind)
 
     @staticmethod
     def _retention(fresh: float, stale: float) -> float:
@@ -193,7 +234,10 @@ class _Core:
     def decide(self, state: _State, entry: CacheEntry | None, *, swr: bool) -> _Decision:
         if entry is None:
             return "miss"
-        if self._gate_open(state) and not state.force_revalidate:
+        resource = state.ctx["resource"]
+        if self._gate_open(state.policy, resource, cast("str", state.kind)) and not (
+            state.force_revalidate
+        ):
             now = self.clock()
             if now < entry.fresh_until:
                 return "hit"
@@ -241,10 +285,9 @@ class _Core:
     ) -> tuple[httpx2.Response, list[_Op]]:
         key = cast("str", state.key)
         kind = cast("str", state.kind)
-        resource = state.ctx["resource"]
         status = response.status_code
         now = self.clock()
-        fresh, stale = self._times(state.policy, resource, kind)
+        fresh, stale = self._entry_times(state, kind)
         entry = state.entry
         if status == HTTPStatus.NOT_MODIFIED and state.validated and entry is not None:
             etag = response.headers.get("etag", entry.etag) if state.policy.etag else None
@@ -266,7 +309,7 @@ class _Core:
                 response, now=now, fresh=fresh, stale=stale, keep_etag=state.policy.etag
             )
             if new.etag is None and fresh <= 0:
-                return response, []  # nothing to revalidate with and never fresh
+                return response, [_Delete(key)]  # no validator and never fresh: drop the old one
             ops: list[_Op] = [_Set(key, new, self._retention(fresh, stale))]
             if kind == "manifest":
                 ops.extend(self._manifest_ops(entry, new))
@@ -320,13 +363,15 @@ class _Core:
         """Store the PATCH response as the record's entry (it is the read view plus ETag)."""
         if response.status_code != HTTPStatus.OK or not self._storable(response):
             return []
-        fresh, stale = self._times(state.policy, resource, "record")
+        fresh, stale = self._entry_times(state, "record")
         new = build_entry(
             response, now=self.clock(), fresh=fresh, stale=stale, keep_etag=state.policy.etag
         )
         if new.etag is None and fresh <= 0:
             return []
-        key = build_key(resource, "record", record_id, state.ctx["scope"])
+        key = build_key(
+            resource, "record", record_id, state.ctx["scope"], api_version=state.api_version
+        )
         return [_Set(key, new, self._retention(fresh, stale))]
 
 
@@ -394,7 +439,10 @@ class CacheLayer:
         if self._core.wants_body(state, response):
             response.read()
         result, ops = self._core.plan(state, request, response)
+        expected = self._core.finish(state, ops)
         for op in ops:
+            self._apply(op)
+        for op in self._core.late_deletes(state, ops, expected):
             self._apply(op)
         if result is not response:
             response.close()
@@ -419,12 +467,14 @@ class CacheLayer:
         return self._core.events_active(resource)
 
     def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
-        """Clear what an SSE event makes stale (see `keys.event_prefixes`)."""
+        """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
+        self._core.bump(resource)
         for prefix in event_prefixes(resource, action, record_id):
             self._store.clear(prefix)
 
     def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
+        self._core.bump(resource)
         for prefix in resource_prefixes(resource):
             self._store.clear(prefix)
 
@@ -432,9 +482,14 @@ class CacheLayer:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
         self._store.clear(prefix)
 
-    def cached_etag(self, resource: str, record_id: int, scope: str) -> str | None:
-        """The stored ETag of a record, for ``auto_if_match``."""
-        entry = self._store.get(build_key(resource, "record", record_id, scope))
+    def cached_etag(
+        self, resource: str, record_id: int, scope: str, api_version: str | None = None
+    ) -> str | None:
+        """The stored ETag of a record of one API version (``_`` if None), for ``auto_if_match``."""
+        version = api_version or UNVERSIONED
+        entry = self._store.get(
+            build_key(resource, "record", record_id, scope, api_version=version)
+        )
         return None if entry is None else entry.etag
 
 
@@ -502,7 +557,10 @@ class AsyncCacheLayer:
         if self._core.wants_body(state, response):
             await response.aread()
         result, ops = self._core.plan(state, request, response)
+        expected = self._core.finish(state, ops)
         for op in ops:
+            await self._apply(op)
+        for op in self._core.late_deletes(state, ops, expected):
             await self._apply(op)
         if result is not response:
             await response.aclose()
@@ -537,7 +595,11 @@ class AsyncCacheLayer:
                 headers=request.headers,
                 extensions=dict(request.extensions),
             )
-            fresh_state = replace(state, validated=False)
+            fresh_state = replace(
+                state,
+                validated=False,
+                generation=self._core.generation(state.ctx["resource"]),  # as of this request
+            )
             self._core.add_validator(fresh_request, fresh_state)
             fresh_request.extensions[STATE_KEY] = fresh_state
             response = await send(fresh_request)
@@ -559,12 +621,14 @@ class AsyncCacheLayer:
         return self._core.events_active(resource)
 
     async def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
-        """Clear what an SSE event makes stale (see `keys.event_prefixes`)."""
+        """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
+        self._core.bump(resource)
         for prefix in event_prefixes(resource, action, record_id):
             await self._store.clear(prefix)
 
     async def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
+        self._core.bump(resource)
         for prefix in resource_prefixes(resource):
             await self._store.clear(prefix)
 
@@ -572,7 +636,12 @@ class AsyncCacheLayer:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
         await self._store.clear(prefix)
 
-    async def cached_etag(self, resource: str, record_id: int, scope: str) -> str | None:
-        """The stored ETag of a record, for ``auto_if_match``."""
-        entry = await self._store.get(build_key(resource, "record", record_id, scope))
+    async def cached_etag(
+        self, resource: str, record_id: int, scope: str, api_version: str | None = None
+    ) -> str | None:
+        """The stored ETag of a record of one API version (``_`` if None), for ``auto_if_match``."""
+        version = api_version or UNVERSIONED
+        entry = await self._store.get(
+            build_key(resource, "record", record_id, scope, api_version=version)
+        )
         return None if entry is None else entry.etag

@@ -13,6 +13,7 @@ from craftainer_crud_sdk.cache import (
     MemoryStore,
     build_key,
 )
+from craftainer_crud_sdk.interfaces import CacheEntry
 from tests.unit.cache.harness import ETAG, AsyncRunner, Clock, Server, make_request
 
 pytestmark = pytest.mark.asyncio
@@ -195,3 +196,73 @@ async def test_stale_entry_without_validator_is_refetched_plainly() -> None:
     await drain(layer)
     assert len(server.calls) == 2
     assert "if-none-match" not in server.calls[1].headers
+
+
+async def test_swr_revalidation_in_flight_during_an_invalidation_is_revalidate_only() -> None:
+    """An event landing during the background request leaves no fresh window."""
+    runner, server, store, layer, clock = setup()
+    await runner.send(make_request())
+    clock.now += 100  # inside the SWR window
+    server.etag = '"v2"'
+
+    async def raced(request: httpx2.Request) -> httpx2.Response:
+        """The invalidation lands while the background request is in flight."""
+        response = await runner.raw(request)
+        await layer.invalidate_event("heroes", "update", 1)
+        return response
+
+    layer.bind(raced)
+    assert status_of(await runner.send(make_request())) == "stale"
+    await drain(layer)
+    entry = store.get(build_key("heroes", "list", None, "anon"))
+    assert entry is not None
+    assert entry.etag == '"v2"'
+    assert entry.fresh_until <= entry.stored_at
+    assert entry.stale_until <= entry.stored_at
+
+
+async def test_async_versions_do_not_share_entries_and_events_clear_both() -> None:
+    """V1 and v2 are separate entries; one event clears both."""
+    runner, server, store, layer, _ = setup()
+    await runner.send(make_request(api_version="v1"))
+    server.etag = '"other"'
+    second = await runner.send(make_request(api_version="v2"))
+    assert status_of(second) == "miss"
+    assert len(store) == 2
+    assert await layer.cached_etag("heroes", 1, "anon") is None
+    await layer.invalidate_event("heroes", "create", 1)
+    assert len(store) == 0
+
+
+async def test_async_revalidate_only_has_no_fresh_hits_or_swr() -> None:
+    """The manifest hint wins over max_age and the SWR window."""
+    clock = Clock()
+    store = MemoryStore(clock=clock)
+    policy = CachePolicy(max_age=60, stale_while_revalidate=120, revalidate_only=True)
+    layer = AsyncCacheLayer(AsyncMemoryStore(store), {"heroes": policy}, clock=clock)
+    layer.set_events_active("heroes", True)
+    runner = AsyncRunner(layer, Server())
+    layer.bind(runner.raw)
+    await runner.send(make_request())
+    assert status_of(await runner.send(make_request())) == "revalidated"
+    assert not layer._tasks
+
+
+async def test_async_invalidation_during_the_store_drops_the_new_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An event landing while the entry is being stored removes it again."""
+    runner, _, store, layer, _ = setup()
+    request = make_request()
+    await layer.on_request(request)
+    response = await runner.raw(request)
+    real_set = layer._store.set
+
+    async def set_then_invalidate(key: str, entry: CacheEntry, ttl: float | None = None) -> None:
+        """Store, then an event lands before the layer re-checks."""
+        await real_set(key, entry, ttl)
+        await layer.invalidate_event("heroes", "update", 1)
+
+    monkeypatch.setattr(layer._store, "set", set_then_invalidate)
+    await layer.on_response(request, response)
+    assert len(store) == 0

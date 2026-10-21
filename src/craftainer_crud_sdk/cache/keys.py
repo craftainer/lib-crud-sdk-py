@@ -1,12 +1,16 @@
-"""Cache key construction and the invalidation prefix table.
+"""Cache key construction and the invalidation prefixes.
 
-Keys are slash-separated: ``v1/{resource}/{kind}/{subject}/{scope}/{canonicalQuery}``. Because the
-scope comes after the subject, one prefix clears an entry for every caller at once.
+Keys are slash-separated:
+``v1/{resource}/{kind}/{subject}/{api_version}/{scope}/{canonicalQuery}``. Versions of one
+resource never share an entry, but they share one event stream; because the version comes after
+kind and subject, one prefix such as ``v1/{resource}/record/{id}/`` clears an entry in every
+version and for every caller at once.
 """
 
 __all__ = [
     "KINDS",
     "STATS_KINDS",
+    "UNVERSIONED",
     "build_key",
     "canonical_query",
     "event_prefixes",
@@ -21,6 +25,7 @@ __all__ = [
 
 KINDS = frozenset({"list", "record", "stats", "predict", "revisions", "filters"})
 STATS_KINDS = frozenset({"stats", "predict"})
+UNVERSIONED = "_"
 _COLLECTION_KINDS = ("list", "stats", "predict")
 _PER_RECORD_KINDS = ("record", "revisions")
 
@@ -44,12 +49,18 @@ def subject_for(kind: str, record_id: int | None) -> str:
     return "_"
 
 
-def build_key(
-    resource: str, kind: str, record_id: int | None, scope: str, query: str | bytes = ""
+def build_key(  # noqa: PLR0913  # a key is these independent facts
+    resource: str,
+    kind: str,
+    record_id: int | None,
+    scope: str,
+    query: str | bytes = "",
+    *,
+    api_version: str = UNVERSIONED,
 ) -> str:
     """Build the key for one cached response."""
     subject = subject_for(kind, record_id)
-    return f"v1/{resource}/{kind}/{subject}/{scope}/{canonical_query(query)}"
+    return f"v1/{resource}/{kind}/{subject}/{api_version}/{scope}/{canonical_query(query)}"
 
 
 def manifest_key(scope: str) -> str:
@@ -58,7 +69,7 @@ def manifest_key(scope: str) -> str:
 
 
 def resource_prefix(resource: str) -> str:
-    """Prefix of everything cached for ``resource``."""
+    """Prefix of everything cached for ``resource``, in every API version."""
     return f"v1/{resource}/"
 
 

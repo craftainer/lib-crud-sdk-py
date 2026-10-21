@@ -17,16 +17,8 @@ from craftainer_crud_sdk import (
 )
 
 
-def _jwt(claims: object) -> str:
-    def enc(data: bytes) -> str:
-        """Enc."""
-        return base64.urlsafe_b64encode(data).decode().rstrip("=")
-
-    return f"{enc(b'{}')}.{enc(json.dumps(claims).encode())}.sig"
-
-
 def _digest(text: str) -> str:
-    return hashlib.sha256(text.encode()).hexdigest()[:16]
+    return hashlib.sha256(text.encode()).hexdigest()[:32]
 
 
 def test_scope_anonymous() -> None:
@@ -34,20 +26,27 @@ def test_scope_anonymous() -> None:
     assert cache_scope(None) == "anon"
 
 
-def test_scope_uses_sub() -> None:
-    """Test scope uses sub."""
-    token = _jwt({"sub": "user-1", "exp": 1})
-    assert cache_scope(token) == _digest("user-1")
-    assert "user-1" not in cache_scope(token)
+def _jwt(claims: object) -> str:
+    def enc(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).decode().rstrip("=")
+
+    return f"{enc(b'{}')}.{enc(json.dumps(claims).encode())}.sig"
 
 
-@pytest.mark.parametrize(
-    "token",
-    ["opaque", "a.b.c", _jwt({"nosub": 1}), _jwt({"sub": 5}), _jwt(["x"]), "a.!!!.c"],
-)
-def test_scope_falls_back_to_token_hash(token: str) -> None:
-    """Test scope falls back to token hash."""
-    assert cache_scope(token) == _digest(token)
+@pytest.mark.parametrize("token", ["opaque", "a.b.c", "a.!!!.c", _jwt({"sub": "u"}), _jwt({})])
+def test_scope_hashes_the_whole_token(token: str) -> None:
+    """The scope is 32 hex of sha256 of the whole token and never contains it."""
+    scope = cache_scope(token)
+    assert scope == _digest(token)
+    assert len(scope) == 32
+    assert token not in scope
+
+
+def test_same_sub_different_tokens_get_different_scopes() -> None:
+    """A forged token with a victim's `sub` cannot land in the victim's scope."""
+    real = _jwt({"sub": "user-1", "exp": 1})
+    forged = _jwt({"sub": "user-1", "exp": 2})
+    assert cache_scope(real) != cache_scope(forged)
 
 
 def test_static_token() -> None:
@@ -69,7 +68,9 @@ def _client(
 
 
 def _request(client: httpx2.Client | httpx2.AsyncClient) -> httpx2.Request:
-    context = RequestContext(resource="r", op="list", record_id=None, scope="anon")
+    context = RequestContext(
+        resource="r", op="list", record_id=None, api_version=None, scope="anon"
+    )
     return client.build_request("GET", "http://x/", extensions={EXTENSION_KEY: context})
 
 
