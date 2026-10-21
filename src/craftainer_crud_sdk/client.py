@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import builtins
-import inspect
 from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import TracebackType
@@ -12,11 +11,19 @@ from urllib.parse import urljoin
 
 import httpx2
 
-from craftainer_crud_sdk.auth import BearerAuth, authorization_scope, stamp_scope
+from craftainer_crud_sdk.auth import (
+    BearerAuth,
+    acall_provider,
+    authorization_scope,
+    call_provider,
+    sent_authorization,
+    stamp_scope,
+)
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
     InvalidQueryError,
+    ResponseError,
     UnknownResourceError,
     problem_from_response,
 )
@@ -244,11 +251,14 @@ def _checked(response: httpx2.Response) -> httpx2.Response:
 
 
 def _decode(response: httpx2.Response) -> object:
-    return (
-        None
-        if response.status_code == httpx2.codes.NO_CONTENT or not response.content
-        else response.json()
-    )
+    if response.status_code == httpx2.codes.NO_CONTENT or not response.content:
+        return None
+    try:
+        return response.json()
+    except ValueError as exc:  # JSONDecodeError and UnicodeDecodeError
+        raise ResponseError(
+            f"{response.status_code} response body is not valid JSON: {exc}", response
+        ) from exc
 
 
 class _QueryArgs(TypedDict, total=False):
@@ -553,10 +563,6 @@ class ResourceClient(_Plan):
         return self._client.send_list(self.revisions_call(record_id))
 
 
-def _bearer(token: str | None) -> str | None:
-    return None if token is None else f"Bearer {token}"
-
-
 class CrudClient:
     """Synchronous client: discovers the manifest, hands out `ResourceClient`s."""
 
@@ -606,11 +612,16 @@ class CrudClient:
         self._transport.add_hook(hook)
 
     def scope(self) -> str:
-        """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
+        """The cache scope of the current caller: that of the Authorization header a request gets.
+
+        Same logic as the transport: the provider's token if it returns one, else the header
+        configured on the client (`auth.sent_authorization`).
+        """
         provider = self._token_provider
-        if provider is None:
-            return authorization_scope(self._http.headers.get("Authorization"))
-        return authorization_scope(_bearer(provider()))
+        token = None if provider is None else call_provider(provider)
+        return authorization_scope(
+            sent_authorization(token, self._http.headers.get("Authorization"))
+        )
 
     def set_etag_lookup(
         self, lookup: Callable[[str, int, str, str | None], str | None] | None
@@ -859,12 +870,12 @@ class AsyncCrudClient:
         self._transport.add_hook(hook)
 
     async def scope(self) -> str:
-        """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
+        """The cache scope of the current caller; the same logic as `CrudClient.scope`."""
         provider = self._token_provider
-        if provider is None:
-            return authorization_scope(self._http.headers.get("Authorization"))
-        token = provider()
-        return authorization_scope(_bearer(await token if inspect.isawaitable(token) else token))
+        token = None if provider is None else await acall_provider(provider)
+        return authorization_scope(
+            sent_authorization(token, self._http.headers.get("Authorization"))
+        )
 
     def set_etag_lookup(
         self, lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None

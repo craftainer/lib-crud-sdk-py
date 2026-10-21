@@ -54,6 +54,12 @@ def _under(key: bytes | str, owned: tuple[str, ...]) -> bool:
     return (key.decode() if isinstance(key, bytes) else key).startswith(owned)
 
 
+def _require_namespace(namespace: str) -> None:
+    """An empty namespace would let `clear()` scan (and unlink) every key in the database."""
+    if not namespace:
+        raise ValueError("namespace must not be empty: clear() would reach other data")
+
+
 class RedisStore:
     """`CacheStore` over a synchronous ``redis.Redis`` client (any ``decode_responses``)."""
 
@@ -65,6 +71,7 @@ class RedisStore:
         default_ttl: float = DEFAULT_TTL,
     ) -> None:
         """Use ``client``; every key is prefixed with ``namespace``."""
+        _require_namespace(namespace)
         self._client = client
         self._namespace = namespace
         self._default_ttl = default_ttl
@@ -136,6 +143,7 @@ class AsyncRedisStore:
         default_ttl: float = DEFAULT_TTL,
     ) -> None:
         """Use ``client``; every key is prefixed with ``namespace``."""
+        _require_namespace(namespace)
         self._client = client
         self._namespace = namespace
         self._default_ttl = default_ttl

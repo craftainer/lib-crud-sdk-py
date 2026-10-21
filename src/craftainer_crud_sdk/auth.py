@@ -16,7 +16,16 @@ from craftainer_crud_sdk.interfaces import (
     TokenProvider,
 )
 
-__all__ = ["BearerAuth", "authorization_scope", "cache_scope", "stamp_scope", "static_token"]
+__all__ = [
+    "BearerAuth",
+    "acall_provider",
+    "authorization_scope",
+    "cache_scope",
+    "call_provider",
+    "sent_authorization",
+    "stamp_scope",
+    "static_token",
+]
 
 ANON = "anon"
 
@@ -64,6 +73,38 @@ def static_token(token: str | None) -> TokenProvider:
     return provider
 
 
+def sent_authorization(token: str | None, configured: str | None) -> str | None:
+    """The ``Authorization`` value a request ends up with: the token's, else the configured one.
+
+    No token (or an empty one) sends nothing of its own, so a header the caller configured on the
+    client stays. The auth flow and `CrudClient.scope` both go through here.
+    """
+    return f"Bearer {token}" if token else configured
+
+
+def call_provider(provider: TokenProvider, *, refresh: bool = False) -> str | None:
+    """Call a `TokenProvider`: ``provider()``, or ``provider(refresh=True)`` after a 401.
+
+    Raises `TypeError` for an asynchronous provider, which a synchronous client cannot await.
+    """
+    result: object = provider(refresh=True) if refresh else provider()
+    if inspect.isawaitable(result):
+        if inspect.iscoroutine(result):
+            result.close()  # never awaited: don't leak a "never awaited" warning
+        raise TypeError("a synchronous client needs a synchronous token provider")
+    return cast("str | None", result)
+
+
+async def acall_provider(
+    provider: TokenProvider | AsyncTokenProvider, *, refresh: bool = False
+) -> str | None:
+    """`call_provider` for the async client: calls it the same way, awaiting an async result."""
+    result: object = provider(refresh=True) if refresh else provider()
+    if inspect.isawaitable(result):
+        return cast("str | None", await result)
+    return cast("str | None", result)
+
+
 def _apply(request: httpx2.Request, token: str | None) -> None:
     # No token (or an empty one) sends nothing of its own: an Authorization header the caller
     # configured stays, and the scope follows whatever header the request ends up with.
@@ -86,11 +127,11 @@ class BearerAuth(httpx2.Auth):
     def sync_auth_flow(self, request: httpx2.Request) -> Generator[httpx2.Request, httpx2.Response]:
         """Sync flow: set the token, retry once with a refreshed token on 401."""
         provider = cast("TokenProvider", self._provider)
-        token = provider()
+        token = call_provider(provider)
         _apply(request, token)
         response = yield request
         if response.status_code == httpx2.codes.UNAUTHORIZED:
-            fresh = provider(refresh=True)
+            fresh = call_provider(provider, refresh=True)
             if fresh is not None and fresh != token:
                 _apply(request, fresh)
                 yield request
@@ -98,18 +139,12 @@ class BearerAuth(httpx2.Auth):
     async def async_auth_flow(
         self, request: httpx2.Request
     ) -> AsyncGenerator[httpx2.Request, httpx2.Response]:
-        """Async flow: as the sync one, awaiting the provider when it is a coroutine function."""
-        token = await self._call()
+        """Async flow: as the sync one, awaiting the provider's result when it is awaitable."""
+        token = await acall_provider(self._provider)
         _apply(request, token)
         response = yield request
         if response.status_code == httpx2.codes.UNAUTHORIZED:
-            fresh = await self._call(refresh=True)
+            fresh = await acall_provider(self._provider, refresh=True)
             if fresh is not None and fresh != token:
                 _apply(request, fresh)
                 yield request
-
-    async def _call(self, *, refresh: bool = False) -> str | None:
-        result = self._provider(refresh=refresh)
-        if inspect.isawaitable(result):
-            return await result
-        return result
