@@ -4,8 +4,6 @@ Keys are slash-separated: ``v1/{resource}/{kind}/{subject}/{scope}/{canonicalQue
 scope comes after the subject, one prefix clears an entry for every caller at once.
 """
 
-from urllib.parse import quote, unquote
-
 __all__ = [
     "KINDS",
     "STATS_KINDS",
@@ -28,28 +26,15 @@ _PER_RECORD_KINDS = ("record", "revisions")
 
 
 def canonical_query(query: str | bytes) -> str:
-    """Normalise a query string: drop ``id`` (it is the subject), sort, re-encode.
+    """Sort the query pairs and drop ``id`` (it is the subject).
 
-    Percent-encodes everything except RFC 3986 unreserved characters; ``,`` stays literal (the
-    list separator). Two spellings of the same query map to one key.
+    The client already emits canonical, percent-encoded values, so values are kept verbatim:
+    only the order is normalised.
     """
     text = query.decode("ascii") if isinstance(query, bytes) else query
-    pairs: list[tuple[str, str | None]] = []
-    for part in text.split("&"):
-        if not part:
-            continue
-        name, sep, value = part.partition("=")
-        name = unquote(name.replace("+", " "))
-        if name == "id":
-            continue
-        pairs.append((name, unquote(value.replace("+", " ")) if sep else None))
-    pairs.sort(key=lambda pair: (pair[0], pair[1] or ""))
-    return "&".join(
-        quote(name, safe="")
-        if value is None
-        else f"{quote(name, safe='')}={quote(value, safe=',')}"
-        for name, value in pairs
-    )
+    pairs = [part for part in text.split("&") if part and part.partition("=")[0] != "id"]
+    pairs.sort(key=lambda part: part.partition("="))
+    return "&".join(pairs)
 
 
 def subject_for(kind: str, record_id: int | None) -> str:

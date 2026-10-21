@@ -26,16 +26,12 @@ from craftainer_crud_sdk.cache.keys import (
 from craftainer_crud_sdk.interfaces import CacheEntry
 
 
-def test_canonical_query_is_order_and_spelling_independent() -> None:
-    """Canonical query is order and spelling independent."""
+def test_canonical_query_sorts_and_drops_id_but_keeps_values() -> None:
+    """Canonical query sorts and drops id but keeps values."""
     a = canonical_query("limit=10&name__in=a,b&id=5&sort=-x&flag")
-    b = canonical_query(b"flag&sort=-x&name__in=a%2Cb&limit=10&")
+    b = canonical_query(b"flag&sort=-x&name__in=a,b&limit=10&")
     assert a == b == "flag&limit=10&name__in=a,b&sort=-x"
-
-
-def test_canonical_query_encodes_everything_but_unreserved() -> None:
-    """Canonical query encodes everything but unreserved."""
-    assert canonical_query("q=a b&r=a+c&s=x/y~z") == "q=a%20b&r=a%20c&s=x%2Fy~z"
+    assert canonical_query("q=a%20b&t=2026-10-20T10%3A00Z") == "q=a%20b&t=2026-10-20T10%3A00Z"
     assert canonical_query("") == ""
     assert canonical_query("id=7") == ""
 
