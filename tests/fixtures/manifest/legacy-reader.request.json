@@ -1,0 +1,9 @@
+{
+  "description": "A reader of the old version only; v1 and v2 of one model are separate resources.",
+  "method": "GET",
+  "path": "/api/_crud/manifest",
+  "authenticated": true,
+  "roles": [
+    "legacy-reader"
+  ]
+}

@@ -1,0 +1,9 @@
+{
+  "description": "An authenticated caller with no matching role is treated like an anonymous one: hidden resources are omitted, not refused.",
+  "method": "GET",
+  "path": "/api/_crud/manifest",
+  "authenticated": true,
+  "roles": [
+    "unrelated"
+  ]
+}

@@ -1,0 +1,69 @@
+{
+  "description": "The server setup every request in this directory runs against: resources and the roles gating them.",
+  "service": {
+    "name": "heroes-api",
+    "version": "1.4.0"
+  },
+  "oidc_discovery_url": "https://auth.example.com/realms/craftainer/.well-known/openid-configuration",
+  "stats_ttl_seconds": 30,
+  "resources": [
+    {
+      "name": "heroes",
+      "api_version": "v1",
+      "model": "Hero (reduced view)",
+      "read_roles": [
+        "admin",
+        "legacy-reader"
+      ],
+      "write_roles": [
+        "admin",
+        "hero-writer"
+      ],
+      "delete_roles": [
+        "admin"
+      ],
+      "optional_capabilities": [
+        "events"
+      ]
+    },
+    {
+      "name": "heroes",
+      "api_version": "v2",
+      "model": "tests/support HeroV2 views",
+      "read_roles": [
+        "admin",
+        "hero-reader"
+      ],
+      "write_roles": [
+        "admin",
+        "hero-writer"
+      ],
+      "delete_roles": [
+        "admin"
+      ],
+      "optional_capabilities": [
+        "draft_publish",
+        "archive_restore",
+        "revisions",
+        "events",
+        "stats",
+        "predict",
+        "owner_scoped",
+        "schedulable"
+      ]
+    },
+    {
+      "name": "quests",
+      "api_version": "v1",
+      "model": "Quest (enum + date fields)",
+      "public_read": true,
+      "write_roles": [
+        "admin"
+      ],
+      "delete_roles": [
+        "admin"
+      ],
+      "optional_capabilities": []
+    }
+  ]
+}
