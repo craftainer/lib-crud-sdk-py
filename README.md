@@ -19,6 +19,35 @@ It is an instance of
 every instance). The cross-module contracts live in
 `src/craftainer_crud_sdk/interfaces.py`.
 
+## Caching
+
+Caching is opt-in per resource and is a transport hook, so it works the same for the
+sync and async clients. A `CachePolicy` is defaulted from the manifest `cache` hints
+(`CachePolicy.from_manifest(resource_dict)`) and any field can be overridden.
+
+```python
+from craftainer_crud_sdk.cache import CacheLayer, CachePolicy, MemoryStore
+
+layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_manifest(heroes)})
+```
+
+- By default every reuse is revalidated with `If-None-Match`; a `304` serves the stored
+  body with merged headers. Only `GET` `200` JSON is stored, never `no-store`.
+- `max_age > 0` (fresh hits) and `stale_while_revalidate` (async only) take effect only
+  while the resource's SSE stream is connected, because events are what end freshness
+  early. Wire a stream with `invalidate_on_events(layer, subscriber, "heroes")`
+  (`EventSubscriber` / `AsyncEventSubscriber` from `craftainer_crud_sdk.events`).
+  `stats` and `predict` use `stats_ttl` and need no stream.
+- Events clear cached prefixes; a reconnect clears the resource. A successful write
+  updates or clears what it changed (`PATCH` writes its response through as the record
+  entry), and a `412` evicts the record.
+- Stores: `MemoryStore` (LRU plus TTL) and, with the `redis` extra,
+  `craftainer_crud_sdk.cache.redis.RedisStore` / `AsyncRedisStore`. A Redis outage is a
+  cache miss and a logged warning.
+
+The design and its reasons are in
+[`docs/adrs/0001-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0001-own-thin-cache-layer-with-sse-invalidation.md).
+
 ## Publishing to PyPI
 
 Releases use PyPI [trusted publishing](https://docs.pypi.org/trusted-publishers/)
