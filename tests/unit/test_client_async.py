@@ -18,6 +18,7 @@ from craftainer_crud_sdk import (
     InvalidQueryError,
     NotFound,
     SendRaw,
+    ServerError,
     UnknownResourceError,
 )
 
@@ -66,7 +67,7 @@ def _client(
     )
     return AsyncCrudClient(
         BASE,
-        http=httpx2.AsyncClient(transport=transport),
+        transport=transport,
         hooks=hooks,
         token_provider=token_provider,
     )
@@ -170,10 +171,10 @@ async def test_manifest_failure_and_direct_url() -> None:
 
     client = AsyncCrudClient(
         BASE,
-        http=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
+        transport=httpx2.MockTransport(handler),
         manifest_url=f"{BASE}{MANIFEST_PATH}",
     )
-    with pytest.raises(Exception, match="500"):
+    with pytest.raises(ServerError):
         await client.manifest()
 
 
@@ -236,14 +237,29 @@ async def test_transport_close_and_client_lifecycle() -> None:
     await transport.aclose()
     assert closed == [True]
 
-    injected = httpx2.AsyncClient(transport=make_transport(lambda r: httpx2.Response(200)))
-    async with AsyncCrudClient(BASE, http=injected):
+    async with AsyncCrudClient(
+        BASE, transport=make_transport(lambda r: httpx2.Response(200)), headers={"X-A": "b"}
+    ) as client:
         pass
-    assert not injected.is_closed
-    await injected.aclose()
-    owned = AsyncCrudClient(BASE)
-    await owned.aclose()
-    assert owned._http.is_closed
+    assert client._http.is_closed
+    default = AsyncCrudClient(BASE)
+    await default.aclose()
+    assert default._http.is_closed
+
+
+@pytest.mark.asyncio
+async def test_clone_draft_publish_filters() -> None:
+    """Test clone draft publish filters."""
+    seen: list[httpx2.Request] = []
+    heroes = await _client(lambda r: httpx2.Response(200, json=[]), seen=seen).resource("heroes")
+    await heroes.clone(4)
+    assert (seen[-1].url.path, seen[-1].url.query) == (f"{HEROES_V2}/clone", b"id=4")
+    await heroes.create_draft({"name": "D"})
+    assert seen[-1].url.path == f"{HEROES_V2}/draft"
+    await heroes.publish(4)
+    assert seen[-1].url.path == f"{HEROES_V2}/publish"
+    assert await heroes.filters() == []
+    assert seen[-1].url.path == f"{HEROES_V2}/filters"
 
 
 @pytest.mark.asyncio

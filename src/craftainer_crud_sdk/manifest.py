@@ -12,6 +12,7 @@ from urllib.parse import urljoin
 
 import httpx2
 
+from craftainer_crud_sdk.errors import ConnectionFailed, ManifestError, problem_from_response
 from craftainer_crud_sdk.interfaces import EXTENSION_KEY, RequestContext
 
 __all__ = [
@@ -23,7 +24,6 @@ __all__ = [
     "Events",
     "FieldSpec",
     "Manifest",
-    "ManifestFormatError",
     "Pagination",
     "Resource",
     "Schemas",
@@ -37,10 +37,6 @@ PROFILE = "https://craftainer.github.io/schemas/crud-manifest/v1"
 CATALOG_PATH = "/.well-known/api-catalog"
 
 type _Obj = Mapping[str, Any]
-
-
-class ManifestFormatError(ValueError):
-    """The catalog or the manifest document does not have the shape this SDK understands."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +177,7 @@ class Manifest:
 def _get[T](obj: _Obj, key: str, kind: type[T] | tuple[type, ...], where: str) -> T:
     value = obj.get(key)
     if not isinstance(value, kind) or (isinstance(value, bool) and kind is not bool):
-        raise ManifestFormatError(f"{where}.{key}: missing or of the wrong type")
+        raise ManifestError(f"{where}.{key}: missing or of the wrong type")
     return value  # type: ignore[return-value]
 
 
@@ -192,7 +188,7 @@ def _opt[T](obj: _Obj, key: str, kind: type[T], where: str) -> T | None:
 def _strs(obj: _Obj, key: str, where: str) -> tuple[str, ...]:
     items = _get(obj, key, list, where)
     if not all(isinstance(i, str) for i in items):
-        raise ManifestFormatError(f"{where}.{key}: expected a list of strings")
+        raise ManifestError(f"{where}.{key}: expected a list of strings")
     return tuple(items)
 
 
@@ -302,10 +298,10 @@ def _resource(obj: _Obj, where: str) -> Resource:
 def parse_manifest(document: object) -> Manifest:
     """Parse a manifest document; unknown members are ignored, unknown versions refused."""
     if not isinstance(document, dict):
-        raise ManifestFormatError("the manifest is not a JSON object")
+        raise ManifestError("the manifest is not a JSON object")
     version = _get(document, "manifest_version", str, "manifest")
     if version != "1":
-        raise ManifestFormatError(f"unsupported manifest_version {version!r}")
+        raise ManifestError(f"unsupported manifest_version {version!r}")
     service = _object(document, "service", "manifest")
     return Manifest(
         manifest_version=version,
@@ -328,7 +324,7 @@ def manifest_url_from_catalog(linkset: object, catalog_url: str) -> str:
                 href = link.get("href")
                 if isinstance(href, str):
                     return urljoin(catalog_url, href)
-    raise ManifestFormatError(f"the api-catalog has no describedby link with profile {PROFILE}")
+    raise ManifestError(f"the api-catalog has no describedby link with profile {PROFILE}")
 
 
 def _request(
@@ -340,32 +336,43 @@ def _request(
     return http.build_request("GET", url, headers=headers, extensions={EXTENSION_KEY: context})
 
 
+def _checked_json(response: httpx2.Response) -> object:
+    if response.status_code >= 400:  # noqa: PLR2004
+        raise problem_from_response(response)
+    try:
+        return response.json()
+    except ValueError as exc:
+        raise ManifestError(f"{response.url} is not JSON") from exc
+
+
 def load_manifest(
     http: httpx2.Client, base_url: str, *, manifest_url: str | None = None
 ) -> Manifest:
     """Fetch and parse the manifest, via api-catalog discovery or a direct `manifest_url`.
 
-    Non-2xx responses raise `httpx2.HTTPStatusError`; a bad document `ManifestFormatError`.
+    Raises `ProblemError` subclasses for error responses, `ConnectionFailed` when the request
+    cannot be sent and `ManifestError` for an unusable document.
     """
-    if manifest_url is None:
-        catalog_url = urljoin(base_url, CATALOG_PATH)
-        response = http.send(_request(http, catalog_url, catalog=True))
-        response.raise_for_status()
-        manifest_url = manifest_url_from_catalog(response.json(), catalog_url)
-    response = http.send(_request(http, manifest_url, catalog=False))
-    response.raise_for_status()
-    return parse_manifest(response.json())
+    try:
+        if manifest_url is None:
+            catalog_url = urljoin(base_url, CATALOG_PATH)
+            catalog = _checked_json(http.send(_request(http, catalog_url, catalog=True)))
+            manifest_url = manifest_url_from_catalog(catalog, catalog_url)
+        return parse_manifest(_checked_json(http.send(_request(http, manifest_url, catalog=False))))
+    except httpx2.RequestError as exc:
+        raise ConnectionFailed(str(exc)) from exc
 
 
 async def aload_manifest(
     http: httpx2.AsyncClient, base_url: str, *, manifest_url: str | None = None
 ) -> Manifest:
     """Async twin of `load_manifest`."""
-    if manifest_url is None:
-        catalog_url = urljoin(base_url, CATALOG_PATH)
-        response = await http.send(_request(http, catalog_url, catalog=True))
-        response.raise_for_status()
-        manifest_url = manifest_url_from_catalog(response.json(), catalog_url)
-    response = await http.send(_request(http, manifest_url, catalog=False))
-    response.raise_for_status()
-    return parse_manifest(response.json())
+    try:
+        if manifest_url is None:
+            catalog_url = urljoin(base_url, CATALOG_PATH)
+            catalog = _checked_json(await http.send(_request(http, catalog_url, catalog=True)))
+            manifest_url = manifest_url_from_catalog(catalog, catalog_url)
+        response = await http.send(_request(http, manifest_url, catalog=False))
+        return parse_manifest(_checked_json(response))
+    except httpx2.RequestError as exc:
+        raise ConnectionFailed(str(exc)) from exc

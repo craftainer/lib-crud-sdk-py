@@ -5,7 +5,7 @@ from typing import Any
 
 import pytest
 
-from craftainer_crud_sdk import FieldSpec, QueryError, build_query
+from craftainer_crud_sdk import FieldSpec, InvalidQueryError, build_query
 from craftainer_crud_sdk.query import encode_params, format_scalar
 
 from ._support import resource
@@ -158,13 +158,13 @@ ERRORS: list[tuple[dict[str, Any], str]] = [
 @pytest.mark.parametrize(("kwargs", "message"), ERRORS)
 def test_invalid_queries_raise_before_sending(kwargs: dict[str, Any], message: str) -> None:
     """Test invalid queries raise before sending."""
-    with pytest.raises(QueryError, match=message):
+    with pytest.raises(InvalidQueryError, match=message):
         build_query(ALL, max_limit=1000, **kwargs)
 
 
 def test_enum_choice_is_checked() -> None:
     """Test enum choice is checked."""
-    with pytest.raises(QueryError, match="accepts only"):
+    with pytest.raises(InvalidQueryError, match="accepts only"):
         build_query(QUESTS, filters={"difficulty": "impossible"})
 
 

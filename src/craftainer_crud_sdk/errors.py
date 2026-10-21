@@ -1,4 +1,3 @@
-# ruff: noqa: N818 - class names are fixed by the SDK spec (BadRequest, NotFound, ...)
 """Exception hierarchy: client-side errors and RFC 9457 problem details (ADR-0004)."""
 
 from __future__ import annotations
@@ -57,7 +56,7 @@ class UnknownResourceError(ClientError):
     """The manifest lists no such resource for this caller."""
 
 
-class ConnectionFailed(CrudError):
+class ConnectionFailed(CrudError):  # noqa: N818 - name fixed by the SDK spec
     """The request never produced a response; `__cause__` holds the transport error."""
 
 
@@ -94,11 +93,11 @@ class ProblemError(CrudError):
         self.response = response
 
 
-class BadRequest(ProblemError):
+class BadRequest(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """400."""
 
 
-class Unauthorized(ProblemError):
+class Unauthorized(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """401; `www_authenticate` keeps the challenge."""
 
     @property
@@ -107,27 +106,27 @@ class Unauthorized(ProblemError):
         return self.headers.get("www-authenticate")
 
 
-class Forbidden(ProblemError):
+class Forbidden(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """403."""
 
 
-class NotFound(ProblemError):
+class NotFound(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """404."""
 
 
-class PreconditionFailed(ProblemError):
+class PreconditionFailed(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """412: a stale `If-Match`."""
 
 
-class ValidationFailed(ProblemError):
+class ValidationFailed(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """422; `errors` holds normalized `{loc, msg, type}` entries."""
 
 
-class Locked(ProblemError):
+class Locked(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """423."""
 
 
-class RateLimited(ProblemError):
+class RateLimited(ProblemError):  # noqa: N818 - name fixed by the SDK spec
     """429; `retry_after` is the `Retry-After` header in seconds, when it is a number."""
 
     @property

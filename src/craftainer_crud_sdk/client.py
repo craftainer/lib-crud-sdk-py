@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import AsyncIterator, Callable, Iterator, Mapping, Sequence
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, TypedDict, Unpack, cast
@@ -15,9 +15,7 @@ from craftainer_crud_sdk.auth import BearerAuth
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
-    CrudError,
     InvalidQueryError,
-    ManifestError,
     UnknownResourceError,
     problem_from_response,
 )
@@ -32,7 +30,7 @@ from craftainer_crud_sdk.interfaces import (
     TransportHook,
 )
 from craftainer_crud_sdk.manifest import Manifest, Resource, aload_manifest, load_manifest
-from craftainer_crud_sdk.query import QueryError, build_query, encode_params
+from craftainer_crud_sdk.query import build_query, encode_params
 
 __all__ = [
     "AsyncCrudClient",
@@ -44,6 +42,8 @@ __all__ = [
     "JsonObject",
     "ResourceClient",
 ]
+
+_TIMEOUT = httpx2.Timeout(5.0)
 
 type JsonObject = dict[str, Any]
 type JsonList = builtins.list[JsonObject]
@@ -159,14 +159,6 @@ def _decode(response: httpx2.Response) -> object:
     return None if response.status_code == httpx2.codes.NO_CONTENT else response.json()
 
 
-def _manifest_error(exc: Exception) -> CrudError:
-    if isinstance(exc, httpx2.HTTPStatusError):
-        return problem_from_response(exc.response)
-    if isinstance(exc, httpx2.RequestError):
-        return ConnectionFailed(str(exc))
-    return ManifestError(str(exc))
-
-
 class _QueryArgs(TypedDict, total=False):
     record_id: int | None
     filters: Mapping[str, object] | None
@@ -203,12 +195,9 @@ class _Plan:
         return _Call(method, url, context, json, headers)
 
     def _query(self, **kwargs: Unpack[_QueryArgs]) -> str:
-        try:
-            return build_query(
-                self.resource.fields, max_limit=self.resource.pagination.max_limit, **kwargs
-            )
-        except QueryError as exc:
-            raise InvalidQueryError(str(exc)) from exc
+        return build_query(
+            self.resource.fields, max_limit=self.resource.pagination.max_limit, **kwargs
+        )
 
     def _sub_path(self, key: str, supported: bool) -> str:
         path = self.resource.paths.get(key)
@@ -297,6 +286,23 @@ class _Plan:
             pairs.append(("bucket", bucket))
         return self._call("GET", "predict", path, encode_params(pairs))
 
+    def clone_call(self, record_id: int) -> _Call:
+        path = self._sub_path("clone", self.resource.capabilities.clone)
+        query = self._query(record_id=record_id)
+        return self._call("POST", "clone", path, query, record_id=record_id)
+
+    def draft_call(self, data: object) -> _Call:
+        path = self._sub_path("draft", self.resource.capabilities.draft_publish)
+        return self._call("POST", "draft", path, json=data)
+
+    def publish_call(self, record_id: int) -> _Call:
+        path = self._sub_path("publish", self.resource.capabilities.draft_publish)
+        query = self._query(record_id=record_id)
+        return self._call("POST", "publish", path, query, record_id=record_id)
+
+    def filters_call(self) -> _Call:
+        return self._call("GET", "filters", self._sub_path("filters", True))
+
     def revisions_call(self, record_id: int) -> _Call:
         path = self._sub_path("revisions", self.resource.capabilities.revisions)
         return self._call(
@@ -318,14 +324,6 @@ def _lookup(manifest: Manifest, name: str, api_version: str | None) -> Resource:
             + " for this caller"
         )
     return resource
-
-
-def _install(http: httpx2.Client | httpx2.AsyncClient, wrap: Callable[[Any], Any]) -> None:
-    """Replace the client's transports with hook-running wrappers (httpx2 has no public API)."""
-    http._transport = wrap(http._transport)
-    http._mounts = {
-        pattern: None if inner is None else wrap(inner) for pattern, inner in http._mounts.items()
-    }
 
 
 class ResourceClient(_Plan):
@@ -426,6 +424,22 @@ class ResourceClient(_Plan):
         """A forecast."""
         return self._client.send_object(self.predict_call(field, periods, bucket))
 
+    def clone(self, record_id: int) -> JsonObject:
+        """Copy a record; returns the copy."""
+        return self._client.send_object(self.clone_call(record_id))
+
+    def create_draft(self, data: Mapping[str, Any]) -> JsonObject:
+        """Create a draft (needs `draft_publish`)."""
+        return self._client.send_object(self.draft_call(data))
+
+    def publish(self, record_id: int) -> JsonObject:
+        """Publish a draft (needs `draft_publish`)."""
+        return self._client.send_object(self.publish_call(record_id))
+
+    def filters(self) -> JsonList:
+        """The server's filter metadata (`kind` instead of `value_type`)."""
+        return self._client.send_list(self.filters_call())
+
     def revisions(self, record_id: int) -> JsonList:
         """Revisions of one record, newest first."""
         return self._client.send_list(self.revisions_call(record_id))
@@ -434,39 +448,39 @@ class ResourceClient(_Plan):
 class CrudClient:
     """Synchronous client: discovers the manifest, hands out `ResourceClient`s."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         base_url: str,
         *,
         token_provider: TokenProvider | None = None,
         hooks: Sequence[TransportHook] = (),
-        http: httpx2.Client | None = None,
+        transport: httpx2.BaseTransport | None = None,
         manifest_url: str | None = None,
+        timeout: httpx2.Timeout | float | None = _TIMEOUT,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         """`base_url` is the server origin (or any URL on it); `manifest_url` skips discovery.
 
-        An injected `http` is used as is, except that `hooks` wrap its transports and a
-        `token_provider` replaces its `auth`; it is not closed by `close()`.
+        The client builds its own `httpx2.Client` around `transport` (default: a plain
+        `httpx2.HTTPTransport`, which does not read proxy environment variables), wrapped in a
+        `HookedTransport` that runs `hooks`.
         """
         self.base_url = base_url
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
-        self._owns_http = http is None
-        self._http = http if http is not None else httpx2.Client()
-        if token_provider is not None:
-            self._http.auth = BearerAuth(token_provider)
-        if hooks:
-            _install(self._http, lambda inner: HookedTransport(inner, hooks))
+        self._http = httpx2.Client(
+            transport=HookedTransport(transport or httpx2.HTTPTransport(), hooks),
+            auth=BearerAuth(token_provider) if token_provider is not None else None,
+            timeout=timeout,
+            headers=headers,
+        )
 
     def manifest(self, *, refresh: bool = False) -> Manifest:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
         if self._manifest is None or refresh:
-            try:
-                self._manifest = load_manifest(
-                    self._http, self.base_url, manifest_url=self._manifest_url
-                )
-            except (httpx2.HTTPError, ValueError) as exc:
-                raise _manifest_error(exc) from exc
+            self._manifest = load_manifest(
+                self._http, self.base_url, manifest_url=self._manifest_url
+            )
         return self._manifest
 
     def resource(self, name: str, api_version: str | None = None) -> ResourceClient:
@@ -494,9 +508,8 @@ class CrudClient:
         self._send(call)
 
     def close(self) -> None:
-        """Close the HTTP client when this client created it."""
-        if self._owns_http:
-            self._http.close()
+        """Close the HTTP client and its transport."""
+        self._http.close()
 
     def __enter__(self) -> Self:
         """Enter the context manager."""
@@ -613,6 +626,22 @@ class AsyncResourceClient(_Plan):
         """A forecast."""
         return await self._client.send_object(self.predict_call(field, periods, bucket))
 
+    async def clone(self, record_id: int) -> JsonObject:
+        """Copy a record; returns the copy."""
+        return await self._client.send_object(self.clone_call(record_id))
+
+    async def create_draft(self, data: Mapping[str, Any]) -> JsonObject:
+        """Create a draft (needs `draft_publish`)."""
+        return await self._client.send_object(self.draft_call(data))
+
+    async def publish(self, record_id: int) -> JsonObject:
+        """Publish a draft (needs `draft_publish`)."""
+        return await self._client.send_object(self.publish_call(record_id))
+
+    async def filters(self) -> JsonList:
+        """The server's filter metadata (`kind` instead of `value_type`)."""
+        return await self._client.send_list(self.filters_call())
+
     async def revisions(self, record_id: int) -> JsonList:
         """Revisions of one record, newest first."""
         return await self._client.send_list(self.revisions_call(record_id))
@@ -621,35 +650,34 @@ class AsyncResourceClient(_Plan):
 class AsyncCrudClient:
     """Asynchronous client: discovers the manifest, hands out `AsyncResourceClient`s."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         base_url: str,
         *,
         token_provider: TokenProvider | AsyncTokenProvider | None = None,
         hooks: Sequence[AsyncTransportHook] = (),
-        http: httpx2.AsyncClient | None = None,
+        transport: httpx2.AsyncBaseTransport | None = None,
         manifest_url: str | None = None,
+        timeout: httpx2.Timeout | float | None = _TIMEOUT,
+        headers: Mapping[str, str] | None = None,
     ) -> None:
         """As `CrudClient`; the token provider may be synchronous or asynchronous."""
         self.base_url = base_url
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
-        self._owns_http = http is None
-        self._http = http if http is not None else httpx2.AsyncClient()
-        if token_provider is not None:
-            self._http.auth = BearerAuth(token_provider)
-        if hooks:
-            _install(self._http, lambda inner: AsyncHookedTransport(inner, hooks))
+        self._http = httpx2.AsyncClient(
+            transport=AsyncHookedTransport(transport or httpx2.AsyncHTTPTransport(), hooks),
+            auth=BearerAuth(token_provider) if token_provider is not None else None,
+            timeout=timeout,
+            headers=headers,
+        )
 
     async def manifest(self, *, refresh: bool = False) -> Manifest:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
         if self._manifest is None or refresh:
-            try:
-                self._manifest = await aload_manifest(
-                    self._http, self.base_url, manifest_url=self._manifest_url
-                )
-            except (httpx2.HTTPError, ValueError) as exc:
-                raise _manifest_error(exc) from exc
+            self._manifest = await aload_manifest(
+                self._http, self.base_url, manifest_url=self._manifest_url
+            )
         return self._manifest
 
     async def resource(self, name: str, api_version: str | None = None) -> AsyncResourceClient:
@@ -677,9 +705,8 @@ class AsyncCrudClient:
         await self._send(call)
 
     async def aclose(self) -> None:
-        """Close the HTTP client when this client created it."""
-        if self._owns_http:
-            await self._http.aclose()
+        """Close the HTTP client and its transport."""
+        await self._http.aclose()
 
     async def __aenter__(self) -> Self:
         """Enter the async context manager."""

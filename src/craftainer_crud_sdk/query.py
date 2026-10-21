@@ -8,14 +8,12 @@ from datetime import UTC, date, datetime
 from typing import Protocol
 from urllib.parse import quote
 
-__all__ = ["FieldLike", "QueryError", "build_query", "encode_params", "format_scalar"]
+from craftainer_crud_sdk.errors import InvalidQueryError
+
+__all__ = ["FieldLike", "build_query", "encode_params", "format_scalar"]
 
 _MAX_REGEX_LENGTH = 200
 _UNRESERVED_SAFE = "-._~"
-
-
-class QueryError(ValueError):
-    """A filter, sort or paging argument the server would refuse; raised before sending."""
 
 
 class FieldLike(Protocol):
@@ -71,7 +69,7 @@ def _is_number(value: object) -> bool:
 
 
 def format_scalar(field: FieldLike, value: object) -> str:
-    """Wire form of one value for `field`; raises `QueryError` on a type mismatch."""
+    """Wire form of one value for `field`; raises `InvalidQueryError` on a type mismatch."""
     kind = field.value_type
     text: str | None = None
     if kind == "integer":
@@ -92,9 +90,11 @@ def format_scalar(field: FieldLike, value: object) -> str:
     elif isinstance(value, str):
         text = value
     if text is None:
-        raise QueryError(f"field {field.name!r} ({kind}) cannot take {value!r}")
+        raise InvalidQueryError(f"field {field.name!r} ({kind}) cannot take {value!r}")
     if kind == "enum" and field.choices is not None and text not in field.choices:
-        raise QueryError(f"field {field.name!r} accepts only {list(field.choices)}, not {text!r}")
+        raise InvalidQueryError(
+            f"field {field.name!r} accepts only {list(field.choices)}, not {text!r}"
+        )
     return text
 
 
@@ -102,14 +102,14 @@ def _filter_pair(field: FieldLike, op: str, value: object) -> tuple[str, str]:
     key = field.name if op == "eq" else f"{field.name}__{op}"
     if op == "in":
         if not isinstance(value, list | tuple) or not value:
-            raise QueryError(f"{key!r} takes a non-empty list or tuple")
+            raise InvalidQueryError(f"{key!r} takes a non-empty list or tuple")
         parts = [format_scalar(field, item) for item in value]
         if any("," in part for part in parts):
-            raise QueryError(f"{key!r}: a value contains a comma, which separates the list")
+            raise InvalidQueryError(f"{key!r}: a value contains a comma, which separates the list")
         return key, ",".join(_quote(part) for part in parts)
     text = format_scalar(field, value)
     if op == "regex" and len(text) > _MAX_REGEX_LENGTH:
-        raise QueryError(f"{key!r}: a regex is limited to {_MAX_REGEX_LENGTH} characters")
+        raise InvalidQueryError(f"{key!r}: a regex is limited to {_MAX_REGEX_LENGTH} characters")
     return key, _quote(text)
 
 
@@ -123,13 +123,13 @@ def _filter_pairs(
             name, suffix = raw_key, "eq"
         field = fields.get(name)
         if field is None:
-            raise QueryError(f"unknown filter field {name!r}")
+            raise InvalidQueryError(f"unknown filter field {name!r}")
         if suffix not in field.filter_ops:
-            raise QueryError(f"field {name!r} does not support the {suffix!r} operator")
+            raise InvalidQueryError(f"field {name!r} does not support the {suffix!r} operator")
         if name == "id" and suffix == "eq":
-            raise QueryError("filter on id with record_id, not an equality filter")
+            raise InvalidQueryError("filter on id with record_id, not an equality filter")
         if (name, suffix) in parsed:
-            raise QueryError(f"filter {name!r} {suffix!r} given twice")
+            raise InvalidQueryError(f"filter {name!r} {suffix!r} given twice")
         parsed[name, suffix] = _filter_pair(field, suffix, value)
     return [parsed[k] for k in sorted(parsed)]
 
@@ -141,16 +141,16 @@ def _sort_value(fields: Mapping[str, FieldLike], sort: str | Sequence[str]) -> s
         name = part.removeprefix("-")
         field = fields.get(name)
         if field is None or not field.sortable:
-            raise QueryError(f"cannot sort by {name!r}")
+            raise InvalidQueryError(f"cannot sort by {name!r}")
         out.append(_quote(part))
     if not out:
-        raise QueryError("sort is empty")
+        raise InvalidQueryError("sort is empty")
     return ",".join(out)
 
 
 def _int_arg(name: str, value: int, minimum: int) -> str:
     if isinstance(value, bool) or not isinstance(value, int) or value < minimum:
-        raise QueryError(f"{name} must be an integer >= {minimum}")
+        raise InvalidQueryError(f"{name} must be an integer >= {minimum}")
     return str(value)
 
 
@@ -185,7 +185,7 @@ def build_query(  # noqa: PLR0913 - one keyword per documented query parameter
     if limit is not None:
         text = _int_arg("limit", limit, 1)
         if max_limit is not None and limit > max_limit:
-            raise QueryError(f"limit {limit} exceeds the server maximum {max_limit}")
+            raise InvalidQueryError(f"limit {limit} exceeds the server maximum {max_limit}")
         parts.append(f"limit={text}")
     if include_archived is not None:
         parts.append(f"include_archived={'true' if include_archived else 'false'}")

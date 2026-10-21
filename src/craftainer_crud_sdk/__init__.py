@@ -54,7 +54,6 @@ from craftainer_crud_sdk.manifest import (
     Events,
     FieldSpec,
     Manifest,
-    ManifestFormatError,
     Pagination,
     Resource,
     Schemas,
@@ -62,7 +61,7 @@ from craftainer_crud_sdk.manifest import (
     load_manifest,
     parse_manifest,
 )
-from craftainer_crud_sdk.query import QueryError, build_query
+from craftainer_crud_sdk.query import build_query
 
 __all__ = [
     "EXTENSION_KEY",
@@ -96,13 +95,11 @@ __all__ = [
     "Locked",
     "Manifest",
     "ManifestError",
-    "ManifestFormatError",
     "NotFound",
     "Op",
     "Pagination",
     "PreconditionFailed",
     "ProblemError",
-    "QueryError",
     "RateLimited",
     "RequestContext",
     "Resource",

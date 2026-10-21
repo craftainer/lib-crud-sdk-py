@@ -8,8 +8,10 @@ import httpx2
 import pytest
 
 from craftainer_crud_sdk import (
+    ConnectionFailed,
     Manifest,
-    ManifestFormatError,
+    ManifestError,
+    NotFound,
     aload_manifest,
     load_manifest,
     parse_manifest,
@@ -133,13 +135,13 @@ BAD: list[Callable[[dict[str, Any]], object]] = [
 @pytest.mark.parametrize("mutate", BAD)
 def test_malformed_documents_are_refused(mutate: Callable[[dict[str, Any]], object]) -> None:
     """Test malformed documents are refused."""
-    with pytest.raises(ManifestFormatError):
+    with pytest.raises(ManifestError):
         parse_manifest(_broken(mutate))
 
 
 def test_non_object_document() -> None:
     """Test non object document."""
-    with pytest.raises(ManifestFormatError, match="not a JSON object"):
+    with pytest.raises(ManifestError, match="not a JSON object"):
         parse_manifest([])
 
 
@@ -166,7 +168,7 @@ def test_nullable_members() -> None:
 )
 def test_catalog_without_manifest_link(linkset: object) -> None:
     """Test catalog without manifest link."""
-    with pytest.raises(ManifestFormatError, match="no describedby"):
+    with pytest.raises(ManifestError, match="no describedby"):
         manifest_url_from_catalog(linkset, f"{BASE}/.well-known/api-catalog")
 
 
@@ -198,7 +200,7 @@ def test_load_direct_url_and_http_error() -> None:
     with httpx2.Client(transport=make_transport(lambda r: httpx2.Response(404), seen=seen)) as http:
         load_manifest(http, BASE, manifest_url=f"{BASE}{MANIFEST_PATH}")
         assert len(seen) == 1
-        with pytest.raises(httpx2.HTTPStatusError):
+        with pytest.raises(NotFound):
             load_manifest(http, BASE, manifest_url=f"{BASE}/nope")
 
 
@@ -212,5 +214,36 @@ async def test_async_load() -> None:
         assert (await aload_manifest(http, BASE)).find("quests") is not None
         assert len(seen) == 2
         await aload_manifest(http, BASE, manifest_url=f"{BASE}{MANIFEST_PATH}")
-        with pytest.raises(httpx2.HTTPStatusError):
+        with pytest.raises(NotFound):
             await aload_manifest(http, BASE, manifest_url=f"{BASE}/nope")
+
+
+def _failing(error: Exception | None, body: str) -> httpx2.MockTransport:
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Fail or answer with a non-JSON body."""
+        if error is not None:
+            raise error
+        return httpx2.Response(200, text=body)
+
+    return httpx2.MockTransport(handler)
+
+
+def test_load_failures() -> None:
+    """Transport errors and non-JSON bodies become package errors."""
+    down = _failing(httpx2.ConnectError("down"), "")
+    with httpx2.Client(transport=down) as http, pytest.raises(ConnectionFailed, match="down"):
+        load_manifest(http, BASE)
+    html = _failing(None, "<html>")
+    with httpx2.Client(transport=html) as http, pytest.raises(ManifestError, match="not JSON"):
+        load_manifest(http, BASE)
+
+
+@pytest.mark.asyncio
+async def test_async_load_failures() -> None:
+    """Async twin of the failure mapping."""
+    async with httpx2.AsyncClient(transport=_failing(httpx2.ConnectError("down"), "")) as http:
+        with pytest.raises(ConnectionFailed, match="down"):
+            await aload_manifest(http, BASE)
+    async with httpx2.AsyncClient(transport=_failing(None, "<html>")) as http:
+        with pytest.raises(ManifestError, match="not JSON"):
+            await aload_manifest(http, BASE)

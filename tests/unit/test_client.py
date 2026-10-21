@@ -77,7 +77,7 @@ def _client(
     transport = make_transport(handler or (lambda r: httpx2.Response(200, json=JSON)), seen=seen)
     return CrudClient(
         BASE,
-        http=httpx2.Client(transport=transport),
+        transport=transport,
         hooks=hooks,
         token_provider=token_provider,
         manifest_url=manifest_url,
@@ -363,7 +363,7 @@ def test_manifest_failures() -> None:
                 {"href": MANIFEST_PATH, "profile": "https://craftainer.github.io/schemas/crud-manifest/v1"}
             ]}]})  # fmt: skip
 
-        return CrudClient(BASE, http=httpx2.Client(transport=httpx2.MockTransport(handler)))
+        return CrudClient(BASE, transport=httpx2.MockTransport(handler))
 
     with pytest.raises(ServerError):
         failing(MANIFEST_PATH, httpx2.Response(500, json={"title": "x"})).manifest()
@@ -478,28 +478,58 @@ def test_hooked_transport_directly_and_close() -> None:
     assert closed == [True]
 
 
-def test_hooks_wrap_mounted_transports() -> None:
-    """Test hooks wrap mounted transports."""
-    log: list[str] = []
-    http = httpx2.Client(
-        transport=make_transport(lambda r: httpx2.Response(200, json=[])),
-        mounts={"http://other.test": None, "http://mounted.test": httpx2.MockTransport(
-            lambda r: httpx2.Response(200, json=[])
-        )},
-    )  # fmt: skip
-    CrudClient(BASE, http=http, hooks=[Recorder("a", log)])
-    assert http.get("http://mounted.test/x").status_code == 200
-    assert log == ["req:a", "resp:a"]
+def test_timeout_and_headers_passthrough() -> None:
+    """Test timeout and headers passthrough."""
+    seen: list[httpx2.Request] = []
+    transport = make_transport(lambda r: httpx2.Response(200, json=[]), seen=seen)
+    client = CrudClient(BASE, transport=transport, timeout=3.0, headers={"X-App": "t"})
+    client.resource("heroes").list()
+    assert seen[-1].headers["x-app"] == "t"
+    assert seen[-1].extensions["timeout"]["read"] == 3.0
 
 
 def test_close_and_context_manager() -> None:
     """Test close and context manager."""
-    injected = httpx2.Client(transport=make_transport(lambda r: httpx2.Response(200)))
-    with CrudClient(BASE, http=injected) as client:
+    with CrudClient(BASE, transport=make_transport(lambda r: httpx2.Response(200))) as client:
         assert client.base_url == BASE
-    assert not injected.is_closed
-    injected.close()
+    assert client._http.is_closed
 
-    owned = CrudClient(BASE)
-    owned.close()
-    assert owned._http.is_closed
+    default = CrudClient(BASE)
+    default.close()
+    assert default._http.is_closed
+
+
+def test_clone_draft_publish_filters() -> None:
+    """Test clone draft publish filters."""
+    seen: list[httpx2.Request] = []
+    heroes = _client(seen=seen).resource("heroes")
+    heroes.clone(4)
+    assert (_last(seen).method, _last(seen).url.path, _last(seen).url.query) == (
+        "POST", f"{HEROES_V2}/clone", b"id=4",
+    )  # fmt: skip
+    assert _ctx(_last(seen))["op"] == "clone"
+    assert _ctx(_last(seen))["record_id"] == 4
+    heroes.create_draft({"name": "D"})
+    assert (_last(seen).method, _last(seen).url.path) == ("POST", f"{HEROES_V2}/draft")
+    assert _last(seen).content == b'{"name":"D"}'
+    assert _ctx(_last(seen))["op"] == "draft"
+    heroes.publish(4)
+    assert (_last(seen).url.path, _last(seen).url.query) == (f"{HEROES_V2}/publish", b"id=4")
+    assert _ctx(_last(seen))["op"] == "publish"
+    heroes.filters()
+    assert (_last(seen).method, _last(seen).url.path) == ("GET", f"{HEROES_V2}/filters")
+    assert _ctx(_last(seen))["op"] == "filters"
+
+
+def test_clone_draft_publish_gating() -> None:
+    """Test clone draft publish gating."""
+    client = _client()
+    v1 = client.resource("heroes", "v1")
+    with pytest.raises(CapabilityError, match="draft"):
+        v1.create_draft({})
+    with pytest.raises(CapabilityError, match="publish"):
+        v1.publish(1)
+    caps = dataclasses.replace(v1.resource.capabilities, clone=False)
+    no_clone = type(v1)(client, dataclasses.replace(v1.resource, capabilities=caps))
+    with pytest.raises(CapabilityError, match="clone"):
+        no_clone.clone(1)
