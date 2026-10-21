@@ -216,14 +216,24 @@ class _Plan:
     ) -> _Call:
         url = urljoin(self._base_url, path) + (f"?{query}" if query else "")
         context = RequestContext(
-            resource=self.resource.name, op=op, record_id=record_id, scope="anon"
+            resource=self.resource.name,
+            op=op,
+            record_id=record_id,
+            api_version=self.resource.api_version,
+            scope="anon",
         )
         headers = {"If-Match": if_match} if if_match is not None else None
         return _Call(method, url, context, json, headers)
 
     def _query(self, **kwargs: Unpack[_QueryArgs]) -> str:
+        paging = self.resource.pagination
         return build_query(
-            self.resource.fields, max_limit=self.resource.pagination.max_limit, **kwargs
+            self.resource.fields,
+            max_limit=paging.max_limit,
+            skip_param=paging.skip_param,
+            limit_param=paging.limit_param,
+            sort_param=paging.sort_param,
+            **kwargs,
         )
 
     def _sub_path(self, key: str, supported: bool) -> str:
@@ -284,9 +294,11 @@ class _Plan:
 
     def restore_call(self, record_id: int | None, filters: Filters | None) -> _Call:
         path = self._sub_path("restore", self.resource.capabilities.archive_restore)
-        if (record_id is None) == (not filters):
-            raise InvalidQueryError("restore takes either an id or filters")
-        query = self._query(record_id=record_id) if filters is None else self._bulk_filters(filters)
+        if (record_id is None) == (filters is None):
+            raise InvalidQueryError("restore takes exactly one of record_id and filters")
+        query = (
+            self._bulk_filters(filters) if filters is not None else self._query(record_id=record_id)
+        )
         return self._call("POST", "restore", path, query, record_id=record_id)
 
     def stats_call(

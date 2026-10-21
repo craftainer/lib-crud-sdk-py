@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import base64
 import hashlib
 import inspect
-import json
 from collections.abc import AsyncGenerator, Generator
 from typing import cast
 
@@ -24,21 +22,14 @@ ANON = "anon"
 
 
 def cache_scope(token: str | None) -> str:
-    """Cache scope of a caller: `"anon"`, or 16 hex of sha256 of the JWT `sub` (else the token).
+    """Cache scope of a caller: `"anon"`, or the first 32 hex of sha256 of the whole token.
 
-    The payload is base64-decoded, not verified. The raw token never leaves this function.
+    Nothing in the token is trusted or decoded (a forged `sub` must not select another
+    caller's entries). The raw token never leaves this function.
     """
     if token is None:
         return ANON
-    subject = token
-    try:
-        payload = token.split(".")[1]
-        claims = json.loads(base64.urlsafe_b64decode(payload + "=" * (-len(payload) % 4)))
-        if isinstance(claims, dict) and isinstance(claims.get("sub"), str):
-            subject = claims["sub"]
-    except IndexError, ValueError:
-        pass
-    return hashlib.sha256(subject.encode()).hexdigest()[:16]
+    return hashlib.sha256(token.encode()).hexdigest()[:32]
 
 
 def static_token(token: str | None) -> TokenProvider:

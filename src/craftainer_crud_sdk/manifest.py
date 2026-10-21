@@ -330,7 +330,9 @@ def manifest_url_from_catalog(linkset: object, catalog_url: str) -> str:
 def _request(
     http: httpx2.Client | httpx2.AsyncClient, url: str, *, catalog: bool
 ) -> httpx2.Request:
-    context = RequestContext(resource=None, op="manifest", record_id=None, scope="anon")
+    context = RequestContext(
+        resource=None, op="manifest", record_id=None, api_version=None, scope="anon"
+    )
     # The catalog shares the "manifest" op; no-store keeps it out of the manifest cache entry.
     headers = {"Accept": "application/json"} | ({"Cache-Control": "no-store"} if catalog else {})
     return http.build_request("GET", url, headers=headers, extensions={EXTENSION_KEY: context})
