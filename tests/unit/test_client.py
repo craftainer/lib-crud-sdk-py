@@ -28,7 +28,15 @@ from craftainer_crud_sdk import (
     ValidationFailed,
 )
 
-from ._support import BASE, HEROES_V1, HEROES_V2, MANIFEST_PATH, make_transport
+from ._support import (
+    BASE,
+    CATALOG,
+    HEROES_V1,
+    HEROES_V2,
+    MANIFEST_PATH,
+    load_doc,
+    make_transport,
+)
 
 JSON = {"id": 1, "name": "Ada"}
 
@@ -300,6 +308,7 @@ def test_invalid_arguments_raise_before_sending() -> None:
         heroes.restore,
         lambda: heroes.restore(1, {"name": "x"}),
         lambda: heroes.restore(filters={}),
+        lambda: heroes.restore(1, {}),
         lambda: heroes.predict("name"),
         lambda: heroes.predict("nope"),
         lambda: heroes.predict(periods=0),
@@ -533,3 +542,47 @@ def test_clone_draft_publish_gating() -> None:
     no_clone = type(v1)(client, dataclasses.replace(v1.resource, capabilities=caps))
     with pytest.raises(CapabilityError, match="clone"):
         no_clone.clone(1)
+
+
+def test_restore_needs_exactly_one_of_id_and_filters() -> None:
+    """Both given and neither given are rejected before sending."""
+    seen: list[httpx2.Request] = []
+    heroes = _client(seen=seen).resource("heroes")
+    n = len(seen)
+    with pytest.raises(InvalidQueryError, match="exactly one"):
+        heroes.restore(1, {"is_locked": False})
+    with pytest.raises(InvalidQueryError, match="exactly one"):
+        heroes.restore()
+    assert len(seen) == n
+
+
+def test_paging_parameter_names_come_from_the_manifest() -> None:
+    """A manifest with offset/page_size/order is honoured by list and iter_all."""
+    doc = load_doc()
+    for res in doc["resources"]:
+        res["pagination"].update(skip_param="offset", limit_param="page_size", sort_param="order")
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Serve the catalog, the doctored manifest, and short pages."""
+        if request.url.path == "/.well-known/api-catalog":
+            return httpx2.Response(200, json=CATALOG)
+        if request.url.path == MANIFEST_PATH:
+            return httpx2.Response(200, json=doc)
+        seen.append(request)
+        offset = int(request.url.params.get("offset", "0"))
+        return httpx2.Response(
+            200, json=[{"id": offset + i} for i in range(2 if offset < 2 else 1)]
+        )
+
+    client = CrudClient(BASE, transport=httpx2.MockTransport(handler))
+    heroes = client.resource("heroes")
+    assert [r["id"] for r in heroes.iter_all(limit=2, sort="name")] == [0, 1, 2]
+    queries = [r.url.query.decode() for r in seen]
+    assert queries == [
+        "order=name&offset=0&page_size=2",
+        "order=name&offset=2&page_size=2",
+    ]
+    seen.clear()
+    heroes.list(sort="name", skip=3, limit=4)
+    assert seen[0].url.query == b"order=name&offset=3&page_size=4"

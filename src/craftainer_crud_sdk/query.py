@@ -163,14 +163,19 @@ def build_query(  # noqa: PLR0913 - one keyword per documented query parameter
     skip: int | None = None,
     limit: int | None = None,
     max_limit: int | None = None,
+    skip_param: str = "skip",
+    limit_param: str = "limit",
+    sort_param: str = "sort",
     include_archived: bool | None = None,
     include_unpublished: bool | None = None,
 ) -> str:
     """The query string (no leading `?`) for a list, get or bulk call.
 
     `filters` keys are `field` (equality, emitted bare) or `field__op`. Order of parameters:
-    `id`, filters sorted by (field, operator), `sort`, `skip`, `limit`, `include_archived`,
-    `include_unpublished`. Booleans are emitted whenever they are not `None`.
+    `id`, filters sorted by (field, operator), sort, skip, limit, `include_archived`,
+    `include_unpublished`. The sort/skip/limit names are `sort_param`/`skip_param`/`limit_param`
+    (the manifest's `pagination`); the `id` parameter is always `id`. Booleans are emitted
+    whenever they are not `None`.
     """
     by_name = {f.name: f for f in fields}
     parts: list[str] = []
@@ -179,14 +184,14 @@ def build_query(  # noqa: PLR0913 - one keyword per documented query parameter
     # Filter values arrive already percent-encoded (the `in` list keeps its literal commas).
     parts.extend(f"{_quote(key)}={value}" for key, value in _filter_pairs(by_name, filters or {}))
     if sort is not None:
-        parts.append(f"sort={_sort_value(by_name, sort)}")
+        parts.append(f"{_quote(sort_param)}={_sort_value(by_name, sort)}")
     if skip is not None:
-        parts.append(f"skip={_int_arg('skip', skip, 0)}")
+        parts.append(f"{_quote(skip_param)}={_int_arg('skip', skip, 0)}")
     if limit is not None:
         text = _int_arg("limit", limit, 1)
         if max_limit is not None and limit > max_limit:
             raise InvalidQueryError(f"limit {limit} exceeds the server maximum {max_limit}")
-        parts.append(f"limit={text}")
+        parts.append(f"{_quote(limit_param)}={text}")
     if include_archived is not None:
         parts.append(f"include_archived={'true' if include_archived else 'false'}")
     if include_unpublished is not None:
