@@ -19,7 +19,7 @@ __all__ = [
     "CATALOG_PATH",
     "PROFILE",
     "Auth",
-    "CachePolicy",
+    "CacheHints",
     "Capabilities",
     "Events",
     "FieldSpec",
@@ -111,8 +111,8 @@ class Auth:
 
 
 @dataclass(frozen=True, slots=True)
-class CachePolicy:
-    """Caching hints."""
+class CacheHints:
+    """The manifest `cache` hints of a resource (the SDK policy is `cache.CachePolicy`)."""
 
     etag: bool
     max_age: int
@@ -150,7 +150,7 @@ class Resource:
     paths: Mapping[str, str]
     bulk_max_matched: int
     auth: Auth
-    cache: CachePolicy
+    cache: CacheHints
 
     def field(self, name: str) -> FieldSpec | None:
         """The filterable field called `name`, if any."""
@@ -283,7 +283,7 @@ def _resource(obj: _Obj, where: str) -> Resource:
             write_roles=_strs(auth, "write_roles", w),
             delete_roles=_strs(auth, "delete_roles", w),
         ),
-        cache=CachePolicy(
+        cache=CacheHints(
             etag=_get(cache, "etag", bool, w),
             max_age=_get(cache, "max_age", int, w),
             stats_ttl=_opt(cache, "stats_ttl", int, w),
