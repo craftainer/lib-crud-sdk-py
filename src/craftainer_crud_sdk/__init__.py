@@ -1,6 +1,17 @@
 """Python client SDK for craftainer-crud APIs."""
 
 from craftainer_crud_sdk.auth import BearerAuth, cache_scope, static_token
+from craftainer_crud_sdk.cache import (
+    CACHE_STATUS_EXTENSION,
+    AsyncCacheLayer,
+    AsyncMemoryStore,
+    CacheLayer,
+    CachePolicy,
+    MemoryStore,
+    build_key,
+    canonical_query,
+    manifest_key,
+)
 from craftainer_crud_sdk.client import (
     AsyncCrudClient,
     AsyncHookedTransport,
@@ -31,6 +42,7 @@ from craftainer_crud_sdk.errors import (
     ValidationFailed,
     problem_from_response,
 )
+from craftainer_crud_sdk.events import AsyncEventSubscriber, EventSubscriber, invalidate_on_events
 from craftainer_crud_sdk.interfaces import (
     EXTENSION_KEY,
     AsyncCacheStore,
@@ -49,7 +61,7 @@ from craftainer_crud_sdk.interfaces import (
 )
 from craftainer_crud_sdk.manifest import (
     Auth,
-    CachePolicy,
+    CacheHints,
     Capabilities,
     Events,
     FieldSpec,
@@ -62,12 +74,17 @@ from craftainer_crud_sdk.manifest import (
     parse_manifest,
 )
 from craftainer_crud_sdk.query import build_query
+from craftainer_crud_sdk.wiring import aenable_cache, enable_cache
 
 __all__ = [
+    "CACHE_STATUS_EXTENSION",
     "EXTENSION_KEY",
+    "AsyncCacheLayer",
     "AsyncCacheStore",
     "AsyncCrudClient",
+    "AsyncEventSubscriber",
     "AsyncHookedTransport",
+    "AsyncMemoryStore",
     "AsyncResourceClient",
     "AsyncTokenProvider",
     "AsyncTransportHook",
@@ -76,6 +93,8 @@ __all__ = [
     "BearerAuth",
     "BindsTransport",
     "CacheEntry",
+    "CacheHints",
+    "CacheLayer",
     "CachePolicy",
     "CacheStore",
     "Capabilities",
@@ -85,6 +104,7 @@ __all__ = [
     "CrudClient",
     "CrudError",
     "CrudEvent",
+    "EventSubscriber",
     "Events",
     "FieldSpec",
     "Forbidden",
@@ -95,6 +115,7 @@ __all__ = [
     "Locked",
     "Manifest",
     "ManifestError",
+    "MemoryStore",
     "NotFound",
     "Op",
     "Pagination",
@@ -113,10 +134,16 @@ __all__ = [
     "Unauthorized",
     "UnknownResourceError",
     "ValidationFailed",
+    "aenable_cache",
     "aload_manifest",
+    "build_key",
     "build_query",
     "cache_scope",
+    "canonical_query",
+    "enable_cache",
+    "invalidate_on_events",
     "load_manifest",
+    "manifest_key",
     "parse_manifest",
     "problem_from_response",
     "static_token",

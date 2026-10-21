@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import builtins
-from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
+import inspect
+from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, TypedDict, Unpack, cast
@@ -11,7 +12,7 @@ from urllib.parse import urljoin
 
 import httpx2
 
-from craftainer_crud_sdk.auth import BearerAuth
+from craftainer_crud_sdk.auth import BearerAuth, cache_scope
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
@@ -62,10 +63,23 @@ class HookedTransport(httpx2.BaseTransport):
     def __init__(self, inner: httpx2.BaseTransport, hooks: Sequence[TransportHook]) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_raw`."""
         self._inner = inner
-        self._hooks = tuple(hooks)
+        self._hooks = list(hooks)
         for hook in self._hooks:
-            if isinstance(hook, BindsTransport):
-                hook.bind(self.send_raw)
+            self._bind(hook)
+
+    def _bind(self, hook: TransportHook) -> None:
+        if isinstance(hook, BindsTransport):
+            hook.bind(self.send_raw)
+
+    @property
+    def hooks(self) -> tuple[TransportHook, ...]:
+        """The installed hooks, in order."""
+        return tuple(self._hooks)
+
+    def add_hook(self, hook: TransportHook) -> None:
+        """Install `hook` after the existing ones (it is bound like a constructor hook)."""
+        self._hooks.append(hook)
+        self._bind(hook)
 
     def send_raw(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks."""
@@ -99,10 +113,23 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_raw`."""
         self._inner = inner
-        self._hooks = tuple(hooks)
+        self._hooks = list(hooks)
         for hook in self._hooks:
-            if isinstance(hook, BindsTransport):
-                hook.bind(self.send_raw)
+            self._bind(hook)
+
+    def _bind(self, hook: AsyncTransportHook) -> None:
+        if isinstance(hook, BindsTransport):
+            hook.bind(self.send_raw)
+
+    @property
+    def hooks(self) -> tuple[AsyncTransportHook, ...]:
+        """The installed hooks, in order."""
+        return tuple(self._hooks)
+
+    def add_hook(self, hook: AsyncTransportHook) -> None:
+        """Install `hook` after the existing ones (it is bound like a constructor hook)."""
+        self._hooks.append(hook)
+        self._bind(hook)
 
     async def send_raw(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks."""
@@ -388,16 +415,20 @@ class ResourceClient(_Plan):
     def update(
         self, record_id: int, data: Mapping[str, Any], if_match: str | None = None
     ) -> JsonObject:
-        """Patch one record; `if_match` is an ETag (`412` when stale)."""
-        call = self.update_call(record_id, data, if_match)
-        return self._client.send_object(call)
+        """Patch one record; `if_match` is an ETag (`412` when stale).
+
+        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
+        """
+        if_match = self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        return self._client.send_object(self.update_call(record_id, data, if_match))
 
     def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
         """Patch every record matching `filters`; returns `{matched, ids}`."""
         return self._client.send_object(self.update_many_call(filters, data))
 
     def delete(self, record_id: int, if_match: str | None = None) -> None:
-        """Delete one record."""
+        """Delete one record; `if_match` as for `update`."""
+        if_match = self._client.resolve_if_match(self.resource.name, record_id, if_match)
         self._client.send_none(self.delete_call(record_id, if_match))
 
     def delete_many(self, filters: Filters) -> JsonObject:
@@ -468,12 +499,49 @@ class CrudClient:
         self.base_url = base_url
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
+        self._token_provider = token_provider
+        self._transport = HookedTransport(transport or httpx2.HTTPTransport(), hooks)
         self._http = httpx2.Client(
-            transport=HookedTransport(transport or httpx2.HTTPTransport(), hooks),
+            transport=self._transport,
             auth=BearerAuth(token_provider) if token_provider is not None else None,
             timeout=timeout,
             headers=headers,
         )
+        self._etag_lookup: Callable[[str, int, str], str | None] | None = None
+        self._closers: list[tuple[Callable[[], None], Callable[[], None]]] = []
+
+    @property
+    def http(self) -> httpx2.Client:
+        """The authenticated `httpx2.Client` every request goes through (also for SSE streams)."""
+        return self._http
+
+    @property
+    def hooks(self) -> tuple[TransportHook, ...]:
+        """The installed transport hooks."""
+        return self._transport.hooks
+
+    def add_hook(self, hook: TransportHook) -> None:
+        """Install a transport hook after construction (it sees every later request)."""
+        self._transport.add_hook(hook)
+
+    def scope(self) -> str:
+        """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
+        provider = self._token_provider
+        return cache_scope(None if provider is None else provider())
+
+    def set_etag_lookup(self, lookup: Callable[[str, int, str], str | None] | None) -> None:
+        """Make `update`/`delete` send `lookup(resource, record_id, scope)` as `If-Match`."""
+        self._etag_lookup = lookup
+
+    def resolve_if_match(self, resource: str, record_id: int, if_match: str | None) -> str | None:
+        """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
+        if if_match is not None or self._etag_lookup is None:
+            return if_match
+        return self._etag_lookup(resource, record_id, self.scope())
+
+    def add_closer(self, close: Callable[[], None], join: Callable[[], None]) -> None:
+        """Run `close` when the client closes, then close HTTP, then `join` (wait for threads)."""
+        self._closers.append((close, join))
 
     def manifest(self, *, refresh: bool = False) -> Manifest:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
@@ -508,8 +576,13 @@ class CrudClient:
         self._send(call)
 
     def close(self) -> None:
-        """Close the HTTP client and its transport."""
+        """Stop what `add_closer` registered, close the HTTP client and its transport."""
+        closers, self._closers = self._closers[::-1], []
+        for close, _ in closers:
+            close()
         self._http.close()
+        for _, join in closers:
+            join()
 
     def __enter__(self) -> Self:
         """Enter the context manager."""
@@ -588,16 +661,20 @@ class AsyncResourceClient(_Plan):
     async def update(
         self, record_id: int, data: Mapping[str, Any], if_match: str | None = None
     ) -> JsonObject:
-        """Patch one record; `if_match` is an ETag (`412` when stale)."""
-        call = self.update_call(record_id, data, if_match)
-        return await self._client.send_object(call)
+        """Patch one record; `if_match` is an ETag (`412` when stale).
+
+        Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
+        """
+        if_match = await self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        return await self._client.send_object(self.update_call(record_id, data, if_match))
 
     async def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
         """Patch every record matching `filters`; returns `{matched, ids}`."""
         return await self._client.send_object(self.update_many_call(filters, data))
 
     async def delete(self, record_id: int, if_match: str | None = None) -> None:
-        """Delete one record."""
+        """Delete one record; `if_match` as for `update`."""
+        if_match = await self._client.resolve_if_match(self.resource.name, record_id, if_match)
         await self._client.send_none(self.delete_call(record_id, if_match))
 
     async def delete_many(self, filters: Filters) -> JsonObject:
@@ -665,12 +742,56 @@ class AsyncCrudClient:
         self.base_url = base_url
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
+        self._token_provider = token_provider
+        self._transport = AsyncHookedTransport(transport or httpx2.AsyncHTTPTransport(), hooks)
         self._http = httpx2.AsyncClient(
-            transport=AsyncHookedTransport(transport or httpx2.AsyncHTTPTransport(), hooks),
+            transport=self._transport,
             auth=BearerAuth(token_provider) if token_provider is not None else None,
             timeout=timeout,
             headers=headers,
         )
+        self._etag_lookup: Callable[[str, int, str], Awaitable[str | None]] | None = None
+        self._closers: list[Callable[[], Awaitable[None]]] = []
+
+    @property
+    def http(self) -> httpx2.AsyncClient:
+        """The authenticated `httpx2.AsyncClient` every request goes through (also for SSE)."""
+        return self._http
+
+    @property
+    def hooks(self) -> tuple[AsyncTransportHook, ...]:
+        """The installed transport hooks."""
+        return self._transport.hooks
+
+    def add_hook(self, hook: AsyncTransportHook) -> None:
+        """Install a transport hook after construction (it sees every later request)."""
+        self._transport.add_hook(hook)
+
+    async def scope(self) -> str:
+        """The cache scope of the current caller (`auth.cache_scope` of the provider's token)."""
+        provider = self._token_provider
+        if provider is None:
+            return cache_scope(None)
+        token = provider()
+        return cache_scope(await token if inspect.isawaitable(token) else token)
+
+    def set_etag_lookup(
+        self, lookup: Callable[[str, int, str], Awaitable[str | None]] | None
+    ) -> None:
+        """Make `update`/`delete` send `await lookup(resource, record_id, scope)` as `If-Match`."""
+        self._etag_lookup = lookup
+
+    async def resolve_if_match(
+        self, resource: str, record_id: int, if_match: str | None
+    ) -> str | None:
+        """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
+        if if_match is not None or self._etag_lookup is None:
+            return if_match
+        return await self._etag_lookup(resource, record_id, await self.scope())
+
+    def add_closer(self, close: Callable[[], Awaitable[None]]) -> None:
+        """Await `close` when the client closes, before the HTTP client is closed."""
+        self._closers.append(close)
 
     async def manifest(self, *, refresh: bool = False) -> Manifest:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
@@ -705,7 +826,10 @@ class AsyncCrudClient:
         await self._send(call)
 
     async def aclose(self) -> None:
-        """Close the HTTP client and its transport."""
+        """Await what `add_closer` registered, then close the HTTP client and its transport."""
+        closers, self._closers = self._closers[::-1], []
+        for close in closers:
+            await close()
         await self._http.aclose()
 
     async def __aenter__(self) -> Self:
