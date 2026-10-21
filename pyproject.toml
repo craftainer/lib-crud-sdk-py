@@ -70,7 +70,7 @@ root_packages = ["craftainer_crud_sdk"]
 name = "craftainer_crud_sdk layers"
 type = "layers"
 containers = ["craftainer_crud_sdk"]
-layers = ["client | events", "cache", "auth | errors | query | manifest", "interfaces"]
+layers = ["client | events", "cache", "auth | query | manifest", "errors", "interfaces"]
 
 [tool.mypy]
 python_version = "3.14"
