@@ -431,7 +431,9 @@ class ResourceClient(_Plan):
 
         Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
         """
-        if_match = self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        if_match = self._client.resolve_if_match(
+            self.resource.name, self.resource.api_version, record_id, if_match
+        )
         return self._client.send_object(self.update_call(record_id, data, if_match))
 
     def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
@@ -440,7 +442,9 @@ class ResourceClient(_Plan):
 
     def delete(self, record_id: int, if_match: str | None = None) -> None:
         """Delete one record; `if_match` as for `update`."""
-        if_match = self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        if_match = self._client.resolve_if_match(
+            self.resource.name, self.resource.api_version, record_id, if_match
+        )
         self._client.send_none(self.delete_call(record_id, if_match))
 
     def delete_many(self, filters: Filters) -> JsonObject:
@@ -519,7 +523,7 @@ class CrudClient:
             timeout=timeout,
             headers=headers,
         )
-        self._etag_lookup: Callable[[str, int, str], str | None] | None = None
+        self._etag_lookup: Callable[[str, int, str, str | None], str | None] | None = None
         self._closers: list[tuple[Callable[[], None], Callable[[], None]]] = []
 
     @property
@@ -541,15 +545,19 @@ class CrudClient:
         provider = self._token_provider
         return cache_scope(None if provider is None else provider())
 
-    def set_etag_lookup(self, lookup: Callable[[str, int, str], str | None] | None) -> None:
-        """Make `update`/`delete` send `lookup(resource, record_id, scope)` as `If-Match`."""
+    def set_etag_lookup(
+        self, lookup: Callable[[str, int, str, str | None], str | None] | None
+    ) -> None:
+        """Make `update`/`delete` send `lookup(resource, id, scope, version)` as `If-Match`."""
         self._etag_lookup = lookup
 
-    def resolve_if_match(self, resource: str, record_id: int, if_match: str | None) -> str | None:
+    def resolve_if_match(
+        self, resource: str, api_version: str, record_id: int, if_match: str | None
+    ) -> str | None:
         """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
         if if_match is not None or self._etag_lookup is None:
             return if_match
-        return self._etag_lookup(resource, record_id, self.scope())
+        return self._etag_lookup(resource, record_id, self.scope(), api_version)
 
     def add_closer(self, close: Callable[[], None], join: Callable[[], None]) -> None:
         """Run `close` when the client closes, then close HTTP, then `join` (wait for threads)."""
@@ -677,7 +685,9 @@ class AsyncResourceClient(_Plan):
 
         Without `if_match`, a client with `auto_if_match` sends the cached record ETag, if any.
         """
-        if_match = await self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        if_match = await self._client.resolve_if_match(
+            self.resource.name, self.resource.api_version, record_id, if_match
+        )
         return await self._client.send_object(self.update_call(record_id, data, if_match))
 
     async def update_many(self, filters: Filters, data: Mapping[str, Any]) -> JsonObject:
@@ -686,7 +696,9 @@ class AsyncResourceClient(_Plan):
 
     async def delete(self, record_id: int, if_match: str | None = None) -> None:
         """Delete one record; `if_match` as for `update`."""
-        if_match = await self._client.resolve_if_match(self.resource.name, record_id, if_match)
+        if_match = await self._client.resolve_if_match(
+            self.resource.name, self.resource.api_version, record_id, if_match
+        )
         await self._client.send_none(self.delete_call(record_id, if_match))
 
     async def delete_many(self, filters: Filters) -> JsonObject:
@@ -762,7 +774,9 @@ class AsyncCrudClient:
             timeout=timeout,
             headers=headers,
         )
-        self._etag_lookup: Callable[[str, int, str], Awaitable[str | None]] | None = None
+        self._etag_lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None = (
+            None
+        )
         self._closers: list[Callable[[], Awaitable[None]]] = []
 
     @property
@@ -788,18 +802,18 @@ class AsyncCrudClient:
         return cache_scope(await token if inspect.isawaitable(token) else token)
 
     def set_etag_lookup(
-        self, lookup: Callable[[str, int, str], Awaitable[str | None]] | None
+        self, lookup: Callable[[str, int, str, str | None], Awaitable[str | None]] | None
     ) -> None:
-        """Make `update`/`delete` send `await lookup(resource, record_id, scope)` as `If-Match`."""
+        """Make `update`/`delete` send `await lookup(resource, id, scope, version)` as If-Match."""
         self._etag_lookup = lookup
 
     async def resolve_if_match(
-        self, resource: str, record_id: int, if_match: str | None
+        self, resource: str, api_version: str, record_id: int, if_match: str | None
     ) -> str | None:
         """`if_match` if given, else the looked-up ETag (when an etag lookup is set)."""
         if if_match is not None or self._etag_lookup is None:
             return if_match
-        return await self._etag_lookup(resource, record_id, await self.scope())
+        return await self._etag_lookup(resource, record_id, await self.scope(), api_version)
 
     def add_closer(self, close: Callable[[], Awaitable[None]]) -> None:
         """Await `close` when the client closes, before the HTTP client is closed."""

@@ -15,9 +15,12 @@ from craftainer_crud_sdk.cache.entry import (
     vary_allows_caching,
 )
 from craftainer_crud_sdk.cache.keys import (
+    event_prefixes,
     kind_prefix,
     record_prefix,
     resource_prefix,
+    resource_prefixes,
+    revisions_prefix,
     subject_for,
 )
 from craftainer_crud_sdk.interfaces import CacheEntry
@@ -35,28 +38,42 @@ def test_canonical_query_sorts_and_drops_id_but_keeps_values() -> None:
 
 def test_build_key_shapes() -> None:
     """Build key shapes."""
-    assert build_key("heroes", "list", None, "anon", "limit=5") == "v1/heroes/_/list/_/anon/limit=5"
-    assert build_key("heroes", "record", 7, "abc", "id=7") == "v1/heroes/_/record/7/abc/"
-    assert build_key("heroes", "revisions", 7, "abc") == "v1/heroes/_/revisions/7/abc/"
-    assert build_key("heroes", "stats", 7, "abc") == "v1/heroes/_/stats/_/abc/"
-    assert build_key("heroes", "list", None, "a", api_version="v2") == "v1/heroes/v2/list/_/a/"
+    assert build_key("heroes", "list", None, "anon", "limit=5") == "v1/heroes/list/_/_/anon/limit=5"
+    assert build_key("heroes", "record", 7, "abc", "id=7") == "v1/heroes/record/7/_/abc/"
+    assert build_key("heroes", "revisions", 7, "abc") == "v1/heroes/revisions/7/_/abc/"
+    assert build_key("heroes", "stats", 7, "abc") == "v1/heroes/stats/_/_/abc/"
+    assert build_key("heroes", "list", None, "a", api_version="v2") == "v1/heroes/list/_/v2/a/"
     assert subject_for("record", None) == "_"
     assert manifest_key("anon") == "v1/_manifest/anon"
 
 
-def test_versions_do_not_share_keys_but_share_the_resource_prefix() -> None:
-    """V1 and v2 of one resource get distinct keys under one resource prefix."""
-    v1 = build_key("r", "list", None, "s", "limit=5", api_version="v1")
-    v2 = build_key("r", "list", None, "s", "limit=5", api_version="v2")
+def test_versions_do_not_share_keys_but_share_every_invalidation_prefix() -> None:
+    """V1 and v2 get distinct keys, both under the same kind and record prefixes."""
+    v1 = build_key("r", "record", 3, "s", "limit=5", api_version="v1")
+    v2 = build_key("r", "record", 3, "s", "limit=5", api_version="v2")
     assert v1 != v2
-    assert v1.startswith(resource_prefix("r")) and v2.startswith(resource_prefix("r"))
+    for prefix in (resource_prefix("r"), kind_prefix("r", "record"), record_prefix("r", 3)):
+        assert v1.startswith(prefix) and v2.startswith(prefix)
 
 
 def test_prefix_helpers() -> None:
     """Prefix helpers."""
     assert resource_prefix("r") == "v1/r/"
-    assert kind_prefix("r", "v2", "list") == "v1/r/v2/list/"
-    assert record_prefix("r", "v2", 3) == "v1/r/v2/record/3/"
+    assert kind_prefix("r", "list") == "v1/r/list/"
+    assert record_prefix("r", 3) == "v1/r/record/3/"
+    assert revisions_prefix("r", 3) == "v1/r/revisions/3/"
+    assert "v1/r/filters/" not in resource_prefixes("r")
+    assert len(resource_prefixes("r")) == 5
+
+
+def test_event_prefix_table() -> None:
+    """Event prefix table."""
+    three = ["v1/r/list/", "v1/r/stats/", "v1/r/predict/"]
+    assert event_prefixes("r", "create", 9) == three
+    for action in ("update", "delete", "restore"):
+        assert event_prefixes("r", action, 9) == [*three, "v1/r/record/9/", "v1/r/revisions/9/"]
+    assert event_prefixes("r", "update", None) == resource_prefixes("r")
+    assert event_prefixes("r", "weird", 9) == resource_prefixes("r")
 
 
 def test_policy_from_manifest_defaults_and_overrides() -> None:

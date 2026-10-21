@@ -24,12 +24,13 @@ We will implement a thin cache layer in `craftainer_crud_sdk.cache` as a transpo
 hook (`TransportHook` / `AsyncTransportHook` from `interfaces.py`) and not depend on a
 cache library.
 
-- **Keys** are `v1/{resource}/{api_version}/{kind}/{subject}/{scope}/{canonicalQuery}`.
+- **Keys** are `v1/{resource}/{kind}/{subject}/{api_version}/{scope}/{canonicalQuery}`.
   Versions of a resource never share an entry (v1 and v2 can differ in shape), but they
-  share one event stream, so event and write invalidation clears `v1/{resource}/` across
-  all versions. A key cannot be cleared by kind across versions, hence the whole-resource
-  clear. The resource, operation, record id, API version (`_` when `None`) and scope come
-  from the request's `RequestContext`, never from the URL or the Authorization header.
+  share one event stream. The version comes after kind and subject, so one prefix such as
+  `v1/R/record/{id}/` or `v1/R/list/` clears an entry in every version, and scope after
+  that clears it for every caller. The resource, operation, record id, API version (`_`
+  when `None`) and scope come from the request's `RequestContext`, never from the URL or
+  the Authorization header.
 - **Only GET 200 JSON** is stored; `Cache-Control: no-store` (response or request),
   `Vary: *` and `Vary` on anything but Authorization/Accept/Accept-Encoding are never
   stored. A storable `200` with no ETag and no fresh window deletes the old entry, so no
@@ -49,12 +50,12 @@ cache library.
   request captures it, and a response whose resource moved on is stored revalidate-only
   (no fresh window, no SWR); if the invalidation lands while the entry is being stored,
   it is deleted again. The async background revalidation captures it when it is sent.
-- **Events invalidate; they never apply snapshots.** Every event and every reconnect
-  clears the whole resource in all versions; a changed manifest ETag clears the
-  `filters` of every `(resource, api_version)` in the old and new manifest.
-- **Writes keep the cache honest**: any successful write clears the resource in all
-  versions, and a single `PATCH` then stores its response as the record entry; a `412`
-  evicts that record's entry in the request's API version.
+- **Events invalidate; they never apply snapshots.** Prefixes cleared per action follow
+  the spec's table, in every API version; a reconnect clears the resource except
+  `filters`; a changed manifest ETag clears every resource's `filters`.
+- **Writes keep the cache honest**: a single `PATCH` stores its response as the record
+  entry and clears list/stats/predict and revisions; creates, deletes and bulk writes
+  clear the affected prefixes; a `412` evicts the record entry. All in every version.
 - **Stale-while-revalidate is async only** in 0.1 (a background task through the raw
   transport, one per key). The sync client revalidates.
 - **Stores** are a thread-safe LRU/TTL memory store and a Redis store (JSON with a
@@ -80,10 +81,11 @@ cache library.
 - Opt-in freshness costs an open SSE connection per resource (ref-counted, so one per
   resource however many listeners); callers who do not run the stream get pure
   revalidation, which is always correct.
-- Clearing the whole resource is coarse (any change clears every cached list page,
-  record, revisions entry and `filters`, in every version) but cannot serve a wrong page;
-  per-kind clearing needs the versions known, and applying snapshots would be finer. Both
-  are possible later optimisations.
+- Events clearing whole prefixes is coarse (any record change clears every cached list
+  page, in every version) but cannot serve a wrong page; applying snapshots would be
+  finer and is a possible later optimisation.
+- `auto_if_match` looks the ETag up by `(resource, record_id, scope, api_version)`, since
+  the record entries of two versions are separate.
 - Redis outages degrade to uncached requests silently apart from the log line.
 - `stats_ttl` freshness can serve data up to that long behind without events; callers
   who need otherwise set `stats_ttl=0` in the policy.

@@ -342,11 +342,11 @@ def test_invalidate_on_events_sync_wiring() -> None:
             break
         deadline.wait(0.05)
     assert layer.events_active("heroes")
-    # an event clears the whole resource (every API version), so the reconnect finds nothing
+    # update(5) cleared list+record 5; the reconnect cleared record 6 too; filters stay
     assert store.get(build_key("heroes", "list", None, "anon")) is None
     assert store.get(build_key("heroes", "record", 5, "anon")) is None
     assert store.get(build_key("heroes", "record", 6, "anon")) is None
-    assert store.get(build_key("heroes", "filters", None, "anon")) is None  # whole resource
+    assert store.get(build_key("heroes", "filters", None, "anon")) is not None
     unsubscribe()
     assert not layer.events_active("heroes")
     release.set()
@@ -395,7 +395,7 @@ async def test_async_subscriber_and_wiring(monkeypatch: pytest.MonkeyPatch) -> N
     assert script.requests[1].url.params["subscriber_id"] == "sub-1"
     assert script.requests[2].url.params["subscriber_id"] == "sub-1"
     assert store.get(build_key("heroes", "record", 6, "anon")) is None
-    assert store.get(build_key("heroes", "filters", None, "anon")) is None  # whole resource
+    assert store.get(build_key("heroes", "filters", None, "anon")) is not None
     assert sleeps[:2] == [0.5, 1.0]
     unsubscribe()
     unsubscribe()

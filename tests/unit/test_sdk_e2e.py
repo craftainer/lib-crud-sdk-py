@@ -124,7 +124,7 @@ def test_write_through_after_patch() -> None:
         heroes.get(1)
         heroes.list()
         patched = heroes.update(1, {"name": "Grace"})
-        assert store.get(build_key("heroes", "record", 1, SCOPE)) is not None
+        assert store.get(build_key("heroes", "record", 1, SCOPE, api_version="v2")) is not None
         assert heroes.get(1) == patched  # 304 against the write-through ETag
         assert heroes.list()[0]["name"] == "Grace"  # the list entry was cleared: a full 200
     assert [(m, s) for m, _, s in server.api()] == [
@@ -145,7 +145,7 @@ def test_412_on_stale_if_match_with_auto_if_match() -> None:
         with pytest.raises(PreconditionFailed):
             heroes.update(1, {"name": "Lost"})
         assert server.requests[-1].headers["if-match"] == '"r1-2"'
-        assert store.get(build_key("heroes", "record", 1, SCOPE)) is None
+        assert store.get(build_key("heroes", "record", 1, SCOPE, api_version="v2")) is None
         assert heroes.get(1)["name"] == "Elsewhere"
         heroes.update(1, {"name": "Won"}, if_match=server.etag(1))  # explicit wins, no lookup
         heroes.update(2, {"name": "Blind"})  # nothing cached for 2: no If-Match
@@ -176,7 +176,7 @@ def test_no_store_is_never_stored() -> None:
         heroes.get(1)
     assert [status for *_, status in server.api()] == [200, 200, 200]
     assert all("if-none-match" not in r.headers for r in server.requests[2:])
-    assert store.get(build_key("heroes", "record", 1, SCOPE)) is None
+    assert store.get(build_key("heroes", "record", 1, SCOPE, api_version="v2")) is None
 
 
 def test_redis_store_works_through_the_client() -> None:

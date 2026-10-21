@@ -40,10 +40,12 @@ from craftainer_crud_sdk.cache.keys import (
     STATS_KINDS,
     UNVERSIONED,
     build_key,
+    event_prefixes,
     kind_prefix,
     manifest_key,
     record_prefix,
-    resource_prefix,
+    resource_prefixes,
+    revisions_prefix,
 )
 from craftainer_crud_sdk.cache.policy import CachePolicy
 from craftainer_crud_sdk.interfaces import (
@@ -63,6 +65,10 @@ log = logging.getLogger(__name__)
 STATE_KEY = "craftainer_cache_state"
 _MIN_RETENTION = 3600.0
 _MANIFEST_POLICY = CachePolicy()
+_COLLECTIONS = ("list", "stats", "predict")
+_BULK_OPS = frozenset({"bulk_update", "bulk_delete"})
+_RECORD_WRITES = frozenset({"delete", "publish", "restore"})
+_CREATES = frozenset({"create", "clone", "draft"})
 
 type _Decision = str  # "hit" | "stale" | "revalidate" | "miss"
 
@@ -253,7 +259,11 @@ class _Core:
         if state.kind is not None:
             return status == HTTPStatus.OK and self._storable(response)
         ctx = state.ctx
-        return status == HTTPStatus.OK and ctx["op"] == "update" and ctx["record_id"] is not None
+        if status == HTTPStatus.OK and ctx["op"] == "update":
+            return ctx["record_id"] is not None
+        return HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES and (
+            ctx["op"] in _BULK_OPS or (ctx["op"] == "restore" and ctx["record_id"] is None)
+        )
 
     @staticmethod
     def _storable(response: httpx2.Response) -> bool:
@@ -312,27 +322,40 @@ class _Core:
         """A changed manifest ETag invalidates every resource's cached ``filters``."""
         if old is None or old.etag == new.etag:
             return []
-        pairs = {(name, UNVERSIONED) for name in self.policies}
-        pairs |= _manifest_resources(old.body) | _manifest_resources(new.body)
-        return [_Clear(kind_prefix(name, version, "filters")) for name, version in sorted(pairs)]
+        names = set(self.policies) | _manifest_resources(old.body) | _manifest_resources(new.body)
+        return [_Clear(kind_prefix(name, "filters")) for name in sorted(names)]
 
     def _write_ops(self, state: _State, response: httpx2.Response) -> list[_Op]:
         ctx = state.ctx
         resource = cast("str", ctx["resource"])
         record_id = ctx["record_id"]
+        op = ctx["op"]
         status = response.status_code
         if status == HTTPStatus.PRECONDITION_FAILED:
-            if record_id is None:
-                return []
-            return [_Clear(record_prefix(resource, state.api_version, record_id))]
+            return [] if record_id is None else [_Clear(record_prefix(resource, record_id))]
         if not HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES:
             return []
-        # Any successful write: clear the resource in every API version (they share one event
-        # stream, so a write is visible in all), then store a single PATCH as the record entry.
-        ops: list[_Op] = [_Clear(resource_prefix(resource))]
-        if ctx["op"] == "update" and record_id is not None:
-            ops.extend(self._write_through(state, response, resource, record_id))
-        return ops
+        collections: list[_Op] = [_Clear(kind_prefix(resource, kind)) for kind in _COLLECTIONS]
+        if op in _CREATES:
+            return collections
+        if record_id is not None and (op in _RECORD_WRITES or op == "update"):
+            ops: list[_Op] = [
+                *collections,
+                _Clear(revisions_prefix(resource, record_id)),
+                _Clear(record_prefix(resource, record_id)),
+            ]
+            if op == "update":
+                ops.extend(self._write_through(state, response, resource, record_id))
+            return ops
+        if op in _BULK_OPS or op == "restore":
+            ids = _ids_from_body(response)
+            if ids is not None:
+                ops = list(collections)
+                for item in ids:
+                    ops.append(_Clear(record_prefix(resource, item)))
+                    ops.append(_Clear(revisions_prefix(resource, item)))
+                return ops
+        return [_Clear(prefix) for prefix in resource_prefixes(resource)]
 
     def _write_through(
         self, state: _State, response: httpx2.Response, resource: str, record_id: int
@@ -352,17 +375,21 @@ class _Core:
         return [_Set(key, new, self._retention(fresh, stale))]
 
 
-def _manifest_resources(body: bytes) -> set[tuple[str, str]]:
-    """The ``(name, api_version)`` pairs of a manifest document; empty if unreadable."""
+def _manifest_resources(body: bytes) -> set[str]:
     try:
         data = json.loads(body)
-        return {
-            (r["name"], r["api_version"])
-            for r in data["resources"]
-            if isinstance(r["name"], str) and isinstance(r["api_version"], str)
-        }
+        return {r["name"] for r in data["resources"] if isinstance(r["name"], str)}
     except ValueError, KeyError, TypeError:
         return set()
+
+
+def _ids_from_body(response: httpx2.Response) -> list[int] | None:
+    """The record ids of a bulk response (``{matched, ids}``), or ``None`` if unreadable."""
+    try:
+        ids = response.json()["ids"]
+        return [int(i) for i in ids]
+    except ValueError, KeyError, TypeError:
+        return None
 
 
 def _stale_response(entry: CacheEntry, request: httpx2.Request, status: str) -> httpx2.Response:
@@ -440,19 +467,16 @@ class CacheLayer:
         return self._core.events_active(resource)
 
     def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
-        """Clear what an SSE event makes stale: the whole resource, in every API version.
-
-        ``action`` and ``record_id`` are accepted for the listener contract but unused: versions
-        share one stream and a key cannot be cleared by kind across them. Responses in flight
-        are stored revalidate-only afterwards.
-        """
-        del action, record_id
-        self.clear_resource(resource)
+        """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
+        self._core.bump(resource)
+        for prefix in event_prefixes(resource, action, record_id):
+            self._store.clear(prefix)
 
     def clear_resource(self, resource: str) -> None:
-        """Clear everything cached for ``resource`` in every API version (after a reconnect)."""
+        """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
         self._core.bump(resource)
-        self._store.clear(resource_prefix(resource))
+        for prefix in resource_prefixes(resource):
+            self._store.clear(prefix)
 
     def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
@@ -597,19 +621,16 @@ class AsyncCacheLayer:
         return self._core.events_active(resource)
 
     async def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
-        """Clear what an SSE event makes stale: the whole resource, in every API version.
-
-        ``action`` and ``record_id`` are accepted for the listener contract but unused: versions
-        share one stream and a key cannot be cleared by kind across them. Responses in flight
-        are stored revalidate-only afterwards.
-        """
-        del action, record_id
-        await self.clear_resource(resource)
+        """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
+        self._core.bump(resource)
+        for prefix in event_prefixes(resource, action, record_id):
+            await self._store.clear(prefix)
 
     async def clear_resource(self, resource: str) -> None:
-        """Clear everything cached for ``resource`` in every API version (after a reconnect)."""
+        """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
         self._core.bump(resource)
-        await self._store.clear(resource_prefix(resource))
+        for prefix in resource_prefixes(resource):
+            await self._store.clear(prefix)
 
     async def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
