@@ -68,7 +68,9 @@ def _client(
 
 
 def _request(client: httpx2.Client | httpx2.AsyncClient) -> httpx2.Request:
-    context = RequestContext(resource="r", op="list", record_id=None, scope="anon")
+    context = RequestContext(
+        resource="r", op="list", record_id=None, api_version=None, scope="anon"
+    )
     return client.build_request("GET", "http://x/", extensions={EXTENSION_KEY: context})
 
 

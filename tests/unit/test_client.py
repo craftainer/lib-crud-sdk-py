@@ -145,7 +145,8 @@ def test_reads() -> None:
         f"{HEROES_V2}?name__icontains=a%20b&sort=-name&skip=5&limit=10"
     )
     assert _ctx(request) == {
-        "resource": "heroes", "op": "list", "record_id": None, "scope": "anon",
+        "resource": "heroes", "op": "list", "record_id": None,
+        "api_version": "v2", "scope": "anon",
     }  # fmt: skip
     assert request.headers["accept"] == "application/json"
 

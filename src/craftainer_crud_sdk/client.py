@@ -216,7 +216,11 @@ class _Plan:
     ) -> _Call:
         url = urljoin(self._base_url, path) + (f"?{query}" if query else "")
         context = RequestContext(
-            resource=self.resource.name, op=op, record_id=record_id, scope="anon"
+            resource=self.resource.name,
+            op=op,
+            record_id=record_id,
+            api_version=self.resource.api_version,
+            scope="anon",
         )
         headers = {"If-Match": if_match} if if_match is not None else None
         return _Call(method, url, context, json, headers)

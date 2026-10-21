@@ -43,6 +43,7 @@ class RequestContext(TypedDict):
     resource: str | None  # manifest name; None for the manifest document itself
     op: Op
     record_id: int | None
+    api_version: str | None  # resource api_version (e.g. "v2"); None for manifest/catalog requests
     scope: str  # "anon", or a hex digest of the caller identity (auth.cache_scope)
 
 

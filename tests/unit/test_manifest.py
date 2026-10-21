@@ -190,7 +190,8 @@ def test_load_via_discovery_carries_context() -> None:
     assert "cache-control" not in seen[1].headers
     for request in seen:
         assert request.extensions["craftainer_crud"] == {
-            "resource": None, "op": "manifest", "record_id": None, "scope": "anon",
+            "resource": None, "op": "manifest", "record_id": None,
+            "api_version": None, "scope": "anon",
         }  # fmt: skip
 
 
