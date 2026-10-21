@@ -664,15 +664,17 @@ class CrudClient:
     def close(self) -> None:
         """Stop what `add_closer` registered, close the HTTP client and its transport."""
         closers, self._closers = self._closers[::-1], []
-        try:
-            for close, _ in closers:
-                close()
-        finally:
+        errors: list[Exception] = []
+        calls = [close for close, _ in closers]
+        calls.append(self._http.close)
+        calls.extend(join for _, join in closers)
+        for call in calls:  # every step runs; the first failure is raised at the end
             try:
-                self._http.close()
-            finally:
-                for _, join in closers:
-                    join()
+                call()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     def __enter__(self) -> Self:
         """Enter the context manager."""
@@ -916,11 +918,14 @@ class AsyncCrudClient:
     async def aclose(self) -> None:
         """Await what `add_closer` registered, then close the HTTP client and its transport."""
         closers, self._closers = self._closers[::-1], []
-        try:
-            for close in closers:
+        errors: list[Exception] = []
+        for close in (*closers, self._http.aclose):  # every step runs; the first failure is raised
+            try:
                 await close()
-        finally:
-            await self._http.aclose()
+            except Exception as exc:
+                errors.append(exc)
+        if errors:
+            raise errors[0]
 
     async def __aenter__(self) -> Self:
         """Enter the async context manager."""

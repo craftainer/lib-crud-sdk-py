@@ -70,6 +70,9 @@ _BULK_OPS = frozenset({"bulk_update", "bulk_delete"})
 _RECORD_WRITES = frozenset({"delete", "publish", "restore"})
 _CREATES = frozenset({"create", "clone", "draft"})
 
+type PolicyKey = str | tuple[str, str]
+"""A resource name (all its versions) or ``(name, api_version)`` (``_`` when unversioned)."""
+
 type _Decision = str  # "hit" | "stale" | "revalidate" | "miss"
 
 
@@ -103,6 +106,7 @@ class _State:
     key: str | None
     api_version: str  # `RequestContext.api_version`, `_` when None
     generation: int  # the resource's invalidation count when the request was made
+    priced: int | None = None  # the generation `plan` priced the new entry against
     entry: CacheEntry | None = None
     force_revalidate: bool = False
     validated: bool = False
@@ -113,15 +117,21 @@ class _Core:
 
     def __init__(
         self,
-        policies: Mapping[str, CachePolicy],
+        policies: Mapping[PolicyKey, CachePolicy],
         *,
         cache_manifest: bool,
         clock: Callable[[], float],
     ) -> None:
-        self.policies = dict(policies)
+        self.policies: dict[str, CachePolicy] = {}
+        self.versioned: dict[tuple[str, str], CachePolicy] = {}
+        for key, policy in policies.items():
+            if isinstance(key, str):
+                self.policies[key] = policy
+            else:
+                self.versioned[key] = policy
         self.cache_manifest = cache_manifest
         self.clock = clock
-        self._events_active: set[str] = set()
+        self._events_active: dict[str, int] = {}  # connected streams per resource (the gate)
         self._lock = threading.Lock()
         self._generations: dict[str, int] = {}
 
@@ -139,10 +149,14 @@ class _Core:
             return generation
 
     def finish(self, state: _State, ops: list[_Op]) -> int:
-        """Before applying ``ops``: bump if a write clears; return the generation expected after."""
+        """Before applying ``ops``: bump if a write clears; return the generation expected after.
+
+        A read expects the generation `plan` priced its entry against, not one read now: an
+        invalidation that landed in between must be seen by `late_deletes`.
+        """
         if state.kind is None and any(isinstance(op, _Clear) for op in ops):
             return self.bump(state.ctx["resource"])
-        return self.generation(state.ctx["resource"])  # `plan` already priced this one in
+        return state.generation if state.priced is None else state.priced
 
     def late_deletes(self, state: _State, ops: list[_Op], expected: int) -> list[_Delete]:
         """Deletes for the entries just stored if an invalidation landed while storing them."""
@@ -172,13 +186,22 @@ class _Core:
     # -- SSE gate ---------------------------------------------------------------------------
 
     def set_events_active(self, resource: str, active: bool) -> None:
-        if active:
-            self._events_active.add(resource)
-        else:
-            self._events_active.discard(resource)
+        """A stream of ``resource`` connected (``True``) or went away (``False``): ref-counted."""
+        with self._lock:
+            count = self._events_active.get(resource, 0) + (1 if active else -1)
+            if count > 0:
+                self._events_active[resource] = count
+            else:
+                self._events_active.pop(resource, None)
 
     def events_active(self, resource: str) -> bool:
         return resource in self._events_active
+
+    def policy_for(self, resource: str | None, version: str) -> CachePolicy | None:
+        """The policy of one (resource, api_version), else the resource's, else ``None``."""
+        if resource is None:
+            return None
+        return self.versioned.get((resource, version)) or self.policies.get(resource)
 
     # -- request side -----------------------------------------------------------------------
 
@@ -190,7 +213,7 @@ class _Core:
         version = ctx["api_version"] or UNVERSIONED
         generation = self.generation(resource)
         if request.method != "GET":
-            policy = self.policies.get(resource) if resource else None
+            policy = self.policy_for(resource, version)
             if policy is None or not policy.enabled:
                 return None
             return _State(ctx, policy, None, None, version, generation)
@@ -218,7 +241,7 @@ class _Core:
             if not self.cache_manifest:
                 return None
             return _MANIFEST_POLICY, "manifest", manifest_key(ctx["scope"])
-        found = self.policies.get(resource) if resource else None
+        found = self.policy_for(resource, version)
         if found is None or not found.enabled or op not in KINDS or resource is None:
             return None
         key = build_key(
@@ -228,8 +251,8 @@ class _Core:
 
     def _gate_open(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
         """Whether an entry of ``kind`` may be fresh (or stale-while-revalidate) right now."""
-        if policy.revalidate_only or kind == "manifest":
-            return False
+        if policy.revalidate_only or kind in {"manifest", "filters"}:
+            return False  # filters are never fresh: events never clear them
         return kind in STATS_KINDS or (resource is not None and resource in self._events_active)
 
     def _times(self, policy: CachePolicy, resource: str | None, kind: str) -> tuple[float, float]:
@@ -242,7 +265,8 @@ class _Core:
     def _entry_times(self, state: _State, kind: str) -> tuple[float, float]:
         """`_times` for a response; none if an invalidation landed while it was in flight."""
         resource = state.ctx["resource"]
-        if self.generation(resource) != state.generation:
+        state.priced = generation = self.generation(resource)  # read once: the price and the check
+        if generation != state.generation:
             return 0.0, 0.0  # at most revalidate-only: the body may predate the invalidation
         return self._times(state.policy, resource, kind)
 
@@ -341,7 +365,12 @@ class _Core:
         """A changed manifest ETag invalidates every resource's cached ``filters``."""
         if old is None or old.etag == new.etag:
             return []
-        names = set(self.policies) | _manifest_resources(old.body) | _manifest_resources(new.body)
+        names = (
+            set(self.policies)
+            | {n for n, _ in self.versioned}
+            | _manifest_resources(old.body)
+            | _manifest_resources(new.body)
+        )
         return [_Clear(kind_prefix(name, "filters")) for name in sorted(names)]
 
     def _write_ops(self, state: _State, response: httpx2.Response) -> list[_Op]:
@@ -446,14 +475,15 @@ def _stale_response(entry: CacheEntry, request: httpx2.Request, status: str) -> 
 class CacheLayer:
     """Synchronous cache hook: a `TransportHook` over a `CacheStore`.
 
-    ``policies`` maps manifest resource names to their policy; a resource without a policy (or
-    with ``enabled=False``) is not cached. The manifest document is cached per caller scope.
+    ``policies`` maps manifest resource names (all versions) or ``(name, api_version)`` pairs to
+    their policy, the pair winning; a resource without a policy (or with ``enabled=False``) is
+    not cached. The manifest document is cached per caller scope.
     """
 
     def __init__(
         self,
         store: CacheStore,
-        policies: Mapping[str, CachePolicy],
+        policies: Mapping[PolicyKey, CachePolicy],
         *,
         cache_manifest: bool = True,
         clock: Callable[[], float] = time.time,
@@ -545,7 +575,7 @@ class AsyncCacheLayer:
     def __init__(
         self,
         store: AsyncCacheStore,
-        policies: Mapping[str, CachePolicy],
+        policies: Mapping[PolicyKey, CachePolicy],
         *,
         cache_manifest: bool = True,
         clock: Callable[[], float] = time.time,

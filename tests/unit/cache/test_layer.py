@@ -6,6 +6,7 @@ import httpx2
 import pytest
 
 from craftainer_crud_sdk.cache import CacheLayer, CachePolicy, MemoryStore, build_key
+from craftainer_crud_sdk.cache.entry import to_response
 from craftainer_crud_sdk.interfaces import CacheEntry, Op
 from tests.unit.cache.harness import ETAG, Clock, Server, SyncRunner, make_request
 
@@ -670,3 +671,72 @@ def test_a_store_without_clear_many_still_works() -> None:
     assert store.cleared == [
         "v1/heroes/list/", "v1/heroes/stats/", "v1/heroes/predict/",
     ]  # fmt: skip
+
+
+def test_an_invalidation_between_pricing_and_storing_deletes_the_stored_entry(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The event lands after `plan` priced the entry fresh, before it was stored."""
+    runner, _, store, layer, _ = setup(events=True)
+    real_plan = layer._core.plan
+
+    def racing(state, request, response):  # type: ignore[no-untyped-def]  # noqa: ANN001, ANN202
+        """Plan, then let an invalidation land."""
+        planned = real_plan(state, request, response)
+        layer.invalidate_event("heroes", "update", 1)
+        return planned
+
+    monkeypatch.setattr(layer._core, "plan", racing)
+    runner.send(make_request())
+    assert store.get(build_key("heroes", "list", None, "anon")) is None
+
+
+def test_filters_are_never_fresh() -> None:
+    """Events never clear `filters`, so a fresh window would outlive a data change."""
+    runner, server, _, _, _ = setup(events=True)
+    runner.send(make_request("filters"))
+    assert status_of(runner.send(make_request("filters"))) == "revalidated"
+    assert len(server.calls) == 2
+
+
+def test_the_gate_counts_streams_and_never_closes_below_the_last() -> None:
+    """Two connected streams of a resource: one going away leaves the gate open."""
+    _, _, _, layer, _ = setup(events=True)
+    layer.set_events_active("heroes", True)
+    layer.set_events_active("heroes", False)
+    assert layer.events_active("heroes")
+    layer.set_events_active("heroes", False)
+    assert not layer.events_active("heroes")
+    layer.set_events_active("heroes", False)  # never below zero
+    layer.set_events_active("heroes", True)
+    assert layer.events_active("heroes")
+
+
+def test_policies_are_per_api_version() -> None:
+    """A `(name, api_version)` policy applies to that version only; a bare name to the rest."""
+    clock = Clock()
+    store = MemoryStore(clock=clock)
+    layer = CacheLayer(
+        store,
+        {("heroes", "v1"): CachePolicy(revalidate_only=True), "heroes": POLICY},
+        clock=clock,
+    )
+    layer.set_events_active("heroes", True)
+    runner = SyncRunner(layer, Server())
+    for version, expected in (("v1", "revalidated"), ("v2", "hit")):
+        runner.send(make_request(api_version=version))
+        assert status_of(runner.send(make_request(api_version=version))) == expected
+
+
+def test_a_304_rebuild_does_not_copy_the_exchange_extensions() -> None:
+    """Reason phrase and network stream belong to the 304, not the rebuilt 200."""
+    request = make_request()
+    response = to_response(
+        CacheEntry(200, (), b"{}", 0, 0, 0),
+        request,
+        status="revalidated",
+        extensions={"reason_phrase": b"Not Modified", "network_stream": object(), "keep": 1},
+    )
+    assert response.extensions["keep"] == 1
+    assert "network_stream" not in response.extensions
+    assert response.reason_phrase == "OK"

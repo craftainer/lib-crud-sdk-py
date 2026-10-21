@@ -65,9 +65,9 @@ def static_token(token: str | None) -> TokenProvider:
 
 
 def _apply(request: httpx2.Request, token: str | None) -> None:
-    if token is None:
-        request.headers.pop("Authorization", None)
-    else:
+    # No token (or an empty one) sends nothing of its own: an Authorization header the caller
+    # configured stays, and the scope follows whatever header the request ends up with.
+    if token:
         request.headers["Authorization"] = f"Bearer {token}"
     stamp_scope(request)
 

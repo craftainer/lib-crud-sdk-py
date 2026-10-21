@@ -93,16 +93,25 @@ def merge_headers(
     return (*kept, *fresh_items)
 
 
+_WIRE_EXTENSIONS = frozenset({"reason_phrase", "http_version", "network_stream"})
+"""Extensions that describe one HTTP exchange (a `304`'s), not the rebuilt `200`."""
+
+
 def to_response(
     entry: CacheEntry, request: httpx2.Request, *, status: str, extensions: Mapping[str, object]
 ) -> httpx2.Response:
-    """Rebuild a response from an entry, tagged with how the cache produced it."""
+    """Rebuild a response from an entry, tagged with how the cache produced it.
+
+    Extensions that describe the exchange itself (reason phrase, HTTP version, network stream)
+    are not copied from `extensions`: they belong to the response being replaced.
+    """
+    kept = {k: v for k, v in extensions.items() if k not in _WIRE_EXTENSIONS}
     return httpx2.Response(
         entry.status,
         headers=list(entry.headers),
         content=entry.body,
         request=request,
-        extensions={**extensions, CACHE_STATUS_EXTENSION: status},
+        extensions={**kept, CACHE_STATUS_EXTENSION: status},
     )
 
 

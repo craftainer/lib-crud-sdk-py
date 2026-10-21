@@ -66,6 +66,9 @@ cache library.
   One response's prefixes (about two per id for a bulk write) are cleared with a single
   store walk: the stores offer `clear_many(prefixes)`, one `SCAN` (memory: one pass)
   tested against all the prefixes; a custom store without it gets one `clear` per prefix.
+  The `SCAN` matches a per-resource glob (`v1/{resource}/...`) under the namespace, so it
+  does not walk other resources' keys; a per-resource index set was considered and not
+  adopted.
 - **Stale-while-revalidate is async only** in 0.1 (a background task through the raw
   transport, one per key). The sync client revalidates.
 - **Stores** are a thread-safe LRU/TTL memory store and a Redis store (JSON with a
@@ -98,6 +101,14 @@ cache library.
 - Events clearing whole prefixes is coarse (any record change clears every cached list
   page, in every version) but cannot serve a wrong page; applying snapshots would be
   finer and is a possible later optimisation.
+- `filters` entries are never fresh (events never clear them), so they always revalidate.
+- The freshness gate is ref-counted per resource: each wiring counts once while its stream
+  is connected, and stopping one never closes the gate for another.
+- Policies are built per (resource name, api_version) from each manifest entry; the event
+  stream and the gate are per resource name.
+- Keys carry no origin. A store shared between servers (or between environments that
+  expose the same resource names) must use a per-origin namespace (the Redis `namespace`
+  argument); the SDK does not enforce it.
 - `auto_if_match` looks the ETag up by `(resource, record_id, scope, api_version)`, since
   the record entries of two versions are separate. The lookup runs in a client-owned
   transport hook after authentication, with the scope of the very token the request is

@@ -3,12 +3,13 @@
 `enable_cache(client, store)` (and `aenable_cache` for the async client) is the one call that joins
 the client core and the cache package:
 
-1. it loads the manifest and builds a `CachePolicy` per resource from its `cache` hints
-   (`overrides` replace a resource's policy);
+1. it loads the manifest and builds a `CachePolicy` per (resource name, api_version) from each
+   entry's `cache` hints (`overrides` replace a resource's policy in every version);
 2. it installs a `CacheLayer`/`AsyncCacheLayer` as a transport hook on the live client;
 3. with `auto_if_match=True`, `update`/`delete` without `if_match` send the cached record ETag;
-4. with `events=True`, it starts one SSE subscriber per resource that has an event stream, through
-   the client's authenticated HTTP client, and wires it to the layer with `invalidate_on_events`.
+4. with `events=True`, it starts one SSE subscriber per resource name (from its newest version)
+   that has an event stream, through the client's authenticated HTTP client, and wires it to the
+   layer with `invalidate_on_events`.
    Only while a stream is connected may `max_age`/`stale_while_revalidate` serve without a
    request.
 
@@ -26,6 +27,7 @@ from craftainer_crud_sdk.cache import (
     CacheLayer,
     CachePolicy,
 )
+from craftainer_crud_sdk.cache.layer import PolicyKey
 from craftainer_crud_sdk.client import AsyncCrudClient, CrudClient
 from craftainer_crud_sdk.errors import UnknownResourceError
 from craftainer_crud_sdk.events import AsyncEventSubscriber, EventSubscriber, invalidate_on_events
@@ -48,12 +50,18 @@ def _selected(manifest: Manifest, names: Sequence[str] | None) -> list[Resource]
 
 
 def _policies(
-    selected: Sequence[Resource], overrides: Mapping[str, CachePolicy] | None
-) -> dict[str, CachePolicy]:
+    manifest: Manifest,
+    selected: Sequence[Resource],
+    overrides: Mapping[str, CachePolicy] | None,
+) -> dict[PolicyKey, CachePolicy]:
+    """A policy per (resource name, api_version) from each manifest entry; an override wins."""
     given = overrides or {}
+    names = {r.name for r in selected}
     return {
-        r.name: given.get(r.name) or CachePolicy.from_manifest({"cache": asdict(r.cache)})
-        for r in selected
+        (r.name, r.api_version): given.get(r.name)
+        or CachePolicy.from_manifest({"cache": asdict(r.cache)})
+        for r in manifest.resources
+        if r.name in names
     }
 
 
@@ -83,9 +91,10 @@ def enable_cache(  # noqa: PLR0913
     """
     if any(isinstance(hook, CacheLayer) for hook in client.hooks):
         raise ValueError("this client already has a cache")
-    selected = _selected(client.manifest(), resources)
+    manifest = client.manifest()
+    selected = _selected(manifest, resources)
     _check_overrides(selected, overrides)
-    layer = CacheLayer(store, _policies(selected, overrides))
+    layer = CacheLayer(store, _policies(manifest, selected, overrides))
     client.add_hook(layer)
     if auto_if_match:
         client.set_etag_lookup(layer.cached_etag)
@@ -113,9 +122,10 @@ async def aenable_cache(  # noqa: PLR0913
     """Async twin of `enable_cache`; the SSE tasks start on the running loop."""
     if any(isinstance(hook, AsyncCacheLayer) for hook in client.hooks):
         raise ValueError("this client already has a cache")
-    selected = _selected(await client.manifest(), resources)
+    manifest = await client.manifest()
+    selected = _selected(manifest, resources)
     _check_overrides(selected, overrides)
-    layer = AsyncCacheLayer(store, _policies(selected, overrides))
+    layer = AsyncCacheLayer(store, _policies(manifest, selected, overrides))
     client.add_hook(layer)
     if auto_if_match:
         client.set_etag_lookup(layer.cached_etag)

@@ -294,3 +294,24 @@ async def test_aclose_still_closes_http_when_a_closer_raises() -> None:
     with pytest.raises(RuntimeError, match="boom"):
         await client.aclose()
     assert client._http.is_closed
+
+
+@pytest.mark.asyncio
+async def test_aclose_runs_every_closer_even_when_the_first_raises() -> None:
+    """A failing closer does not stop the others or the HTTP close."""
+    client = _client()
+    calls: list[str] = []
+
+    async def boom() -> None:
+        msg = "first"
+        raise RuntimeError(msg)
+
+    async def other() -> None:
+        calls.append("other")
+
+    client.add_closer(other)
+    client.add_closer(boom)
+    with pytest.raises(RuntimeError, match="first"):
+        await client.aclose()
+    assert calls == ["other"]
+    assert client._http.is_closed

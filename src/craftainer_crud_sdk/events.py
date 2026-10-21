@@ -191,14 +191,17 @@ class EventSubscriber:
                 return
             self._listeners.remove(listener)
             last = not self._listeners
-            if last:  # decided under the lock, so a racing subscribe sees a stopping reader
-                self._stop.set()
+            # Decided under the lock, so a racing subscribe sees a stopping reader. Stop exactly
+            # this generation: by the time we get to it a newer one may have replaced it.
+            stop, response = self._stop, self._response
+            if last:
+                stop.set()
         try:
             if listener.on_status is not None and self._connected:
                 _guard(listener.on_status, False)
         finally:
-            if last:
-                self._stop_reader()
+            if last and response is not None:
+                response.close()
 
     def _stop_reader(self) -> None:
         """Ask the loop to stop and unblock a reader waiting for a frame by closing its stream."""
@@ -307,6 +310,23 @@ class EventSubscriber:
     def _fan_event(self, event: CrudEvent) -> None:
         for listener in self._snapshot():
             _guard(listener.on_event, event)
+
+
+class _Gate:
+    """One wiring's share of a resource's freshness gate: counts at most once while connected."""
+
+    def __init__(self, layer: CacheLayer | AsyncCacheLayer, resource: str) -> None:
+        self._layer = layer
+        self._resource = resource
+        self._lock = threading.Lock()
+        self._up = False
+
+    def set(self, connected: bool) -> None:
+        with self._lock:
+            if self._up == connected:
+                return
+            self._up = connected
+            self._layer.set_events_active(self._resource, connected)
 
 
 def _guard[**P](fn: Callable[P, None], *args: P.args, **kwargs: P.kwargs) -> None:
@@ -480,9 +500,11 @@ def invalidate_on_events(
     """Wire a subscriber to a cache layer for the manifest resource ``resource_name``.
 
     Events clear the spec's prefixes, a reconnect clears the resource, and fresh hits are allowed
-    only while the stream is connected. Returns the unsubscribe function (it also closes the
-    freshness gate).
+    only while a stream is connected: the layer's gate counts the connected wirings of a resource,
+    so one going away never closes it for another. Returns the unsubscribe function (it also
+    withdraws this wiring's share of the gate).
     """
+    gate = _Gate(cache_layer, resource_name)
     if isinstance(cache_layer, CacheLayer) and isinstance(subscriber, EventSubscriber):
         sync_layer = cache_layer
 
@@ -493,7 +515,7 @@ def invalidate_on_events(
             sync_layer.clear_resource(resource_name)
 
         def on_status(connected: bool) -> None:
-            sync_layer.set_events_active(resource_name, connected)
+            gate.set(connected)
 
         unsubscribe = subscriber.subscribe(on_event, on_reset=on_reset, on_status=on_status)
     else:
@@ -506,7 +528,7 @@ def invalidate_on_events(
             await async_layer.clear_resource(resource_name)
 
         async def aon_status(connected: bool) -> None:
-            async_layer.set_events_active(resource_name, connected)
+            gate.set(connected)
 
         unsubscribe = cast("AsyncEventSubscriber", subscriber).subscribe(
             aon_event, on_reset=aon_reset, on_status=aon_status
@@ -514,6 +536,6 @@ def invalidate_on_events(
 
     def stop() -> None:
         unsubscribe()
-        cache_layer.set_events_active(resource_name, False)
+        gate.set(False)
 
     return stop

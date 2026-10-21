@@ -742,3 +742,71 @@ def test_a_reader_stopped_before_its_response_is_published_publishes_nothing() -
     stopped.set()
     sub._read_once(stopped)
     assert sub._response is None
+
+
+def test_unsubscribe_stops_only_its_own_generation() -> None:
+    """A subscribe racing the last unsubscribe must keep its new reader."""
+    release = threading.Event()
+    script = Script(open_stream(Gate(release, "s1")), open_stream(Gate(release, "s2")))
+    sub = sync_subscriber(script)
+    started: list[Callable[[], None]] = []
+
+    def racing(up: bool) -> None:
+        """A new listener joins while the last one is leaving."""
+        if not up:  # only the leaving call, not the stream's own "connected"
+            started.append(sub.subscribe(lambda e: None))
+
+    un = sub.subscribe(lambda e: None, on_status=racing)
+    for _ in range(200):
+        if sub._connected:
+            break
+        threading.Event().wait(0.02)
+    un()
+    assert started
+    assert not sub._stop.is_set()  # the new generation survives
+    release.set()
+    sub.close()
+
+
+def test_the_gate_stays_open_while_another_wiring_is_connected() -> None:
+    """Two wirings of one resource share the layer's gate; one stopping never closes it."""
+    layer = CacheLayer(MemoryStore(), {"heroes": CachePolicy()})
+    releases = [threading.Event(), threading.Event()]
+    subs = [
+        sync_subscriber(Script(open_stream(Gate(release, f"s{i}"))))
+        for i, release in enumerate(releases)
+    ]
+    stops = [invalidate_on_events(layer, sub, "heroes") for sub in subs]
+    for _ in range(200):
+        if all(sub._connected for sub in subs):
+            break
+        threading.Event().wait(0.02)
+    assert all(sub._connected for sub in subs)
+    stops[0]()
+    assert layer.events_active("heroes")
+    stops[1]()
+    assert not layer.events_active("heroes")
+    for release, sub in zip(releases, subs, strict=True):
+        release.set()
+        sub.close()
+
+
+@pytest.mark.asyncio
+async def test_async_gate_stays_open_while_another_wiring_is_connected() -> None:
+    """The async twin: stop() of one wiring on a shared subscriber keeps the other's share."""
+    layer = AsyncCacheLayer(AsyncMemoryStore(MemoryStore()), {"heroes": CachePolicy()})
+    script = Script(open_stream(AsyncGate("s1")))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS)
+    stop_a = invalidate_on_events(layer, sub, "heroes")
+    stop_b = invalidate_on_events(layer, sub, "heroes")
+    for _ in range(500):
+        if layer.events_active("heroes"):
+            break
+        await asyncio.sleep(0.001)
+    stop_a()
+    assert layer.events_active("heroes")
+    stop_b()
+    assert not layer.events_active("heroes")
+    await sub.aclose()
+    await client.aclose()

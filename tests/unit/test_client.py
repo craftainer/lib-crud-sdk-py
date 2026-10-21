@@ -617,3 +617,20 @@ def test_iter_all_rejects_a_zero_limit() -> None:
     heroes = _client().resource("heroes")
     with pytest.raises(InvalidQueryError):
         next(iter(heroes.iter_all(limit=0)))
+
+
+def test_close_runs_every_closer_even_when_the_first_raises() -> None:
+    """A failing closer does not stop the others, the HTTP close or the joins."""
+    client = _client()
+    calls: list[str] = []
+
+    def boom() -> None:
+        msg = "first"
+        raise RuntimeError(msg)
+
+    client.add_closer(lambda: calls.append("close-2"), lambda: calls.append("join-2"))
+    client.add_closer(boom, lambda: calls.append("join-1"))  # closed first (reverse order)
+    with pytest.raises(RuntimeError, match="first"):
+        client.close()
+    assert calls == ["close-2", "join-1", "join-2"]
+    assert client._http.is_closed

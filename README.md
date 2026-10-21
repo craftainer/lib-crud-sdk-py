@@ -86,7 +86,12 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
   entry), and a `412` evicts the record.
 - Stores: `MemoryStore` (LRU plus TTL) and, with the `redis` extra,
   `craftainer_crud_sdk.cache.redis.RedisStore` / `AsyncRedisStore`. A Redis outage is a
-  cache miss and a logged warning.
+  cache miss and a logged warning. Cache keys carry no server identity: a store shared
+  between servers or environments must use a per-origin namespace (for `RedisStore`, its
+  `namespace` argument).
+- `filters` always revalidate. The freshness gate is counted per resource, so several
+  streams of one resource keep it open until the last is gone. `enable_cache` builds a
+  policy per resource name and `api_version` from each manifest entry.
 
 The design and its reasons are in
 [`docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md).

@@ -163,3 +163,33 @@ async def test_async_with_sync_and_async_providers() -> None:
     ) as client:
         assert (await client.get("http://x/")).status_code == 401
     assert len(seen) == 1
+
+
+def _scope_of(request: httpx2.Request) -> str:
+    context: RequestContext = request.extensions[EXTENSION_KEY]
+    return context["scope"]
+
+
+@pytest.mark.parametrize("token", [None, ""])
+def test_no_token_keeps_a_caller_supplied_authorization_header(token: str | None) -> None:
+    """A provider with nothing to add does not remove the credential the caller configured."""
+    seen: list[httpx2.Request] = []
+    handler_client = _client(_Tokens(token), seen, [200])
+    with handler_client as client:
+        request = client.build_request(
+            "GET", "http://x/", headers={"Authorization": "Basic abc"},
+            extensions={EXTENSION_KEY: _request(client).extensions[EXTENSION_KEY]},
+        )  # fmt: skip
+        client.send(request)
+    assert seen[0].headers["authorization"] == "Basic abc"
+    assert _scope_of(request) == _digest("Basic abc")
+
+
+def test_an_empty_token_without_any_header_is_anonymous() -> None:
+    """An empty bearer token is no token: no header and the anonymous scope."""
+    seen: list[httpx2.Request] = []
+    with _client(_Tokens(""), seen, [200]) as client:
+        request = _request(client)
+        client.send(request)
+    assert "authorization" not in seen[0].headers
+    assert _scope_of(request) == "anon"
