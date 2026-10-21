@@ -170,11 +170,15 @@ class EventSubscriber:
         listener = _Listener(on_event, on_reset, on_status)
         with self._lock:
             self._listeners.append(listener)
-            start = self._thread is None
-            connected = self._connected
+            # A reader that is stopping (its stop event is set) is no stream for this listener:
+            # start a new generation with its own stop event; the old one only winds down.
+            start = self._thread is None or self._stop.is_set()
             if start:
                 self._stop = threading.Event()
-                self._thread = threading.Thread(target=self.run, daemon=True)
+                self._connected = False
+                self._response = None
+                self._thread = threading.Thread(target=self.run, args=(self._stop,), daemon=True)
+            connected = self._connected
         if connected and on_status is not None:
             on_status(True)
         if start:
@@ -187,6 +191,8 @@ class EventSubscriber:
                 return
             self._listeners.remove(listener)
             last = not self._listeners
+            if last:  # decided under the lock, so a racing subscribe sees a stopping reader
+                self._stop.set()
         if listener.on_status is not None and self._connected:
             listener.on_status(False)
         if last:
@@ -194,8 +200,8 @@ class EventSubscriber:
 
     def _stop_reader(self) -> None:
         """Ask the loop to stop and unblock a reader waiting for a frame by closing its stream."""
-        self._stop.set()
         with self._lock:
+            self._stop.set()
             response = self._response
         if response is not None:
             response.close()
@@ -213,56 +219,65 @@ class EventSubscriber:
             if thread.is_alive():
                 log.warning("event stream %s did not stop within %ss", self._stream.url, timeout)
 
-    def run(self) -> None:
+    def run(self, stop: threading.Event | None = None) -> None:
         """Connect, read and reconnect until stopped (blocking; the thread's body).
 
-        However it ends, listeners get ``on_status(False)`` and the thread state is reset, so a
-        later `subscribe` starts a new stream.
+        ``stop`` is this reader's own stop event (the current one by default): a reader that was
+        replaced by a newer generation never touches the newer one's state. However it ends,
+        listeners get ``on_status(False)`` and the thread state is reset, so a later `subscribe`
+        starts a new stream.
         """
+        stop = stop or self._stop
         stream = self._stream
         try:
-            while not self._stop.is_set():
+            while not stop.is_set():
                 try:
-                    self._read_once()
+                    self._read_once(stop)
                 except Exception as exc:
-                    if self._stop.is_set():
+                    if stop.is_set():
                         break  # the stream was closed under the reader
                     if not isinstance(exc, httpx2.HTTPError):
                         raise
                     log.warning("event stream %s lost: %s", stream.url, exc)
-                self._set_connected(False)
-                if self._stop.is_set():
+                self._set_connected(False, stop)
+                if stop.is_set():
                     break
-                self._stop.wait(stream.backoff())
+                stop.wait(stream.backoff())
         except Exception:
             log.exception("event stream %s died", stream.url)
         finally:
-            self._set_connected(False)
+            self._set_connected(False, stop)
             with self._lock:
-                self._thread = None
+                if self._stop is stop:  # not replaced by a newer reader
+                    self._thread = None
 
-    def _read_once(self) -> None:
+    def _read_once(self, stop: threading.Event) -> None:
         stream = self._stream
         with self._client.sse(stream.url, params=stream.params, timeout=stream.timeout) as source:
-            with self._lock:
-                self._response = source.response
+            with self._lock:  # a stopped reader (possibly replaced already) publishes nothing
+                stopped = stop.is_set()
+                if not stopped:
+                    self._response = source.response
+            if stopped:
+                return  # stopped before the response was published: nothing would close it
             try:
-                self._read_frames(source)
+                self._read_frames(source, stop)
             finally:
                 with self._lock:
-                    self._response = None
+                    if self._response is source.response:
+                        self._response = None
 
-    def _read_frames(self, source: httpx2.EventSource) -> None:
+    def _read_frames(self, source: httpx2.EventSource, stop: threading.Event) -> None:
         stream = self._stream
         source.response.raise_for_status()
         for sse in source:
-            if self._stop.is_set():
+            if stop.is_set():
                 return
             frame = stream.decode(sse)
             if isinstance(frame, _Handshake):
                 if stream.handshake(frame):
                     self._fan_reset()
-                self._set_connected(True)
+                self._set_connected(True, stop)
             elif isinstance(frame, _Reset):
                 self._fan_reset()
             elif frame is not None:
@@ -272,11 +287,13 @@ class EventSubscriber:
         with self._lock:
             return list(self._listeners)
 
-    def _set_connected(self, connected: bool) -> None:
-        if self._connected == connected:
-            return
-        self._connected = connected
-        for listener in self._snapshot():
+    def _set_connected(self, connected: bool, stop: threading.Event) -> None:
+        with self._lock:
+            if self._stop is not stop or self._connected == connected:
+                return  # a replaced reader must not flip the newer reader's status
+            self._connected = connected
+            listeners = list(self._listeners)
+        for listener in listeners:
             if listener.on_status is not None:
                 _guard(listener.on_status, connected)
 
@@ -310,6 +327,7 @@ class _AsyncState:
     listeners: list[_AsyncListener] = field(default_factory=list)
     task: asyncio.Task[None] | None = None
     connected: bool = False
+    tasks: set[asyncio.Task[None]] = field(default_factory=set)  # every live reader and notifier
 
 
 class AsyncEventSubscriber:
@@ -339,9 +357,24 @@ class AsyncEventSubscriber:
         listener = _AsyncListener(on_event, on_reset, on_status)
         state = self._state
         state.listeners.append(listener)
+        loop = asyncio.get_running_loop()
         if state.task is None:
-            state.task = asyncio.get_running_loop().create_task(self.run())
+            state.connected = False
+            state.task = self._track(loop.create_task(self.run()))
+        elif state.connected and on_status is not None:
+            self._track(loop.create_task(self._notify_connected(listener)))
         return lambda: self._unsubscribe(listener)
+
+    def _track(self, task: asyncio.Task[None]) -> asyncio.Task[None]:
+        self._state.tasks.add(task)
+        task.add_done_callback(self._state.tasks.discard)
+        return task
+
+    async def _notify_connected(self, listener: _AsyncListener) -> None:
+        """Tell a listener that joined a connected stream (unless that changed meanwhile)."""
+        state = self._state
+        if listener in state.listeners and state.connected and listener.on_status is not None:
+            await _aguard(listener.on_status(True))
 
     def _unsubscribe(self, listener: _AsyncListener) -> None:
         state = self._state
@@ -349,19 +382,21 @@ class AsyncEventSubscriber:
             return
         state.listeners.remove(listener)
         if not state.listeners and state.task is not None:
+            # Detach at once: a subscribe before the cancelled task has exited starts a new reader.
             state.task.cancel()
+            state.task = None
+            state.connected = False
 
     async def aclose(self) -> None:
         """Stop the stream and wait for its task."""
-        task = self._state.task
-        if task is not None:
+        tasks = list(self._state.tasks)
+        for task in tasks:
             task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
     async def run(self) -> None:
         """Connect, read and reconnect until cancelled."""
         stream = self._stream
-        state = self._state
         try:
             while True:
                 try:
@@ -373,9 +408,19 @@ class AsyncEventSubscriber:
         except Exception:
             log.exception("event stream %s died", stream.url)
         finally:
-            # On any exit (cancel, close, a bug) tell the listeners, so the gate closes.
-            state.task = None
-            await self._set_connected(False)
+            await self._finished()
+
+    async def _finished(self) -> None:
+        """On any exit (cancel, close, a bug) tell the listeners, so the gate closes.
+
+        Not when the task was detached (the last listener left) or replaced by a newer reader:
+        that one's state is not ours to reset.
+        """
+        state = self._state
+        if state.task is not asyncio.current_task():
+            return
+        state.task = None
+        await self._set_connected(False)
 
     async def _read_once(self) -> None:
         stream = self._stream

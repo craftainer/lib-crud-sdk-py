@@ -16,7 +16,7 @@ from craftainer_crud_sdk.interfaces import (
     TokenProvider,
 )
 
-__all__ = ["BearerAuth", "cache_scope", "static_token"]
+__all__ = ["BearerAuth", "authorization_scope", "cache_scope", "stamp_scope", "static_token"]
 
 ANON = "anon"
 
@@ -30,6 +30,29 @@ def cache_scope(token: str | None) -> str:
     if token is None:
         return ANON
     return hashlib.sha256(token.encode()).hexdigest()[:32]
+
+
+_BEARER = "bearer "
+
+
+def authorization_scope(authorization: str | None) -> str:
+    """Cache scope of an ``Authorization`` header value: `"anon"` only when there is none.
+
+    A Bearer value hashes its token (so it equals `cache_scope(token)`); any other scheme hashes
+    the whole value. Nothing is decoded or trusted, and the credential never leaves this function.
+    """
+    if authorization is None:
+        return ANON
+    if authorization[: len(_BEARER)].lower() == _BEARER:
+        return cache_scope(authorization[len(_BEARER) :].strip())
+    return cache_scope(authorization)
+
+
+def stamp_scope(request: httpx2.Request) -> None:
+    """Set the request context's scope from the ``Authorization`` header the request carries."""
+    context = cast("RequestContext | None", request.extensions.get(EXTENSION_KEY))
+    if context is not None:
+        context["scope"] = authorization_scope(request.headers.get("Authorization"))
 
 
 def static_token(token: str | None) -> TokenProvider:
@@ -46,9 +69,7 @@ def _apply(request: httpx2.Request, token: str | None) -> None:
         request.headers.pop("Authorization", None)
     else:
         request.headers["Authorization"] = f"Bearer {token}"
-    context = cast("RequestContext | None", request.extensions.get(EXTENSION_KEY))
-    if context is not None:
-        context["scope"] = cache_scope(token)
+    stamp_scope(request)
 
 
 class BearerAuth(httpx2.Auth):

@@ -1,5 +1,7 @@
 """The synchronous cache hook against the shared scenarios."""
 
+from collections.abc import Sequence
+
 import httpx2
 import pytest
 
@@ -595,3 +597,76 @@ def test_a_storable_200_without_validator_or_freshness_deletes_the_old_entry() -
     server.status = 200
     runner.send(make_request("list"))
     assert len(store) == 0
+
+
+class CountingStore(MemoryStore):
+    """Counts how often the store is walked."""
+
+    def __init__(self, **kwargs: object) -> None:
+        """Create it."""
+        super().__init__(**kwargs)  # type: ignore[arg-type]
+        self.clears = 0
+        self.many: list[list[str]] = []
+
+    def clear(self, prefix: str | None = None) -> None:
+        """Count."""
+        self.clears += 1
+        super().clear(prefix)
+
+    def clear_many(self, prefixes: Sequence[str]) -> None:
+        """Count."""
+        self.many.append(list(prefixes))
+        super().clear_many(prefixes)
+
+
+class PlainStore:
+    """A custom store that has only the four protocol methods."""
+
+    def __init__(self) -> None:
+        """Create it."""
+        self.inner = MemoryStore()
+        self.cleared: list[str | None] = []
+
+    def get(self, key: str) -> CacheEntry | None:
+        """Delegate."""
+        return self.inner.get(key)
+
+    def set(self, key: str, entry: CacheEntry, ttl: float | None = None) -> None:
+        """Delegate."""
+        self.inner.set(key, entry, ttl)
+
+    def delete(self, key: str) -> None:
+        """Delegate."""
+        self.inner.delete(key)
+
+    def clear(self, prefix: str | None = None) -> None:
+        """Record, then delegate."""
+        self.cleared.append(prefix)
+        self.inner.clear(prefix)
+
+
+def test_events_resets_and_bulk_writes_walk_the_store_once() -> None:
+    """Each invalidation is one clear_many call, not a clear per prefix or per id."""
+    store = CountingStore()
+    layer = CacheLayer(store, {"heroes": POLICY})
+    layer.invalidate_event("heroes", "update", 7)
+    layer.clear_resource("heroes")
+    assert len(store.many) == 2
+    assert "v1/heroes/record/7/" in store.many[0]
+    server = Server()
+    runner = SyncRunner(layer, server)
+    server.body = {"matched": 3, "ids": [1, 2, 3]}
+    runner.send(make_request("bulk_update", method="PATCH"))
+    assert len(store.many) == 3
+    assert {f"v1/heroes/record/{i}/" for i in (1, 2, 3)} <= set(store.many[2])
+    assert store.clears == 0
+
+
+def test_a_store_without_clear_many_still_works() -> None:
+    """Custom stores that only implement the protocol get a clear per prefix."""
+    store = PlainStore()
+    layer = CacheLayer(store, {"heroes": POLICY})
+    layer.invalidate_event("heroes", "create", None)
+    assert store.cleared == [
+        "v1/heroes/list/", "v1/heroes/stats/", "v1/heroes/predict/",
+    ]  # fmt: skip

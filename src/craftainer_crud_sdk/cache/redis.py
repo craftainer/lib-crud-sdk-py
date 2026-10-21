@@ -6,7 +6,8 @@ or a corrupt value is a miss and a logged warning; it never fails the request.
 """
 
 import logging
-from collections.abc import Iterable
+import os.path
+from collections.abc import Iterable, Sequence
 
 import redis as redis_sync
 import redis.asyncio as redis_async
@@ -42,6 +43,15 @@ def _batches(keys: Iterable[bytes | str]) -> Iterable[list[bytes | str]]:
             batch = []
     if batch:
         yield batch
+
+
+def _scan_pattern(namespace: str, prefixes: Sequence[str]) -> str:
+    """Glob matching every key under any prefix: their longest common prefix, then ``*``."""
+    return _glob_escape(os.path.commonprefix([namespace + p for p in prefixes])) + "*"
+
+
+def _under(key: bytes | str, owned: tuple[str, ...]) -> bool:
+    return (key.decode() if isinstance(key, bytes) else key).startswith(owned)
 
 
 class RedisStore:
@@ -99,6 +109,21 @@ class RedisStore:
         except redis_sync.RedisError as exc:
             log.warning("redis clear failed, entries may be stale: %s", exc)
 
+    def clear_many(self, prefixes: Sequence[str]) -> None:
+        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass; an outage is a warning."""
+        if not prefixes:
+            return
+        owned = tuple(self._namespace + p for p in prefixes)
+        pattern = _scan_pattern(self._namespace, prefixes)
+        try:
+            matching = (
+                k for k in self._client.scan_iter(match=pattern, count=_BATCH) if _under(k, owned)
+            )
+            for batch in _batches(matching):
+                self._client.unlink(*batch)
+        except redis_sync.RedisError as exc:
+            log.warning("redis clear failed, entries may be stale: %s", exc)
+
 
 class AsyncRedisStore:
     """`AsyncCacheStore` over ``redis.asyncio.Redis``."""
@@ -148,15 +173,21 @@ class AsyncRedisStore:
 
     async def clear(self, prefix: str | None = None) -> None:
         """Remove keys under ``namespace + prefix``; only this store's namespace is touched."""
-        pattern = _glob_escape(self._namespace + (prefix or "")) + "*"
-        batch: list[bytes | str] = []
+        await self.clear_many([prefix or ""])
+
+    async def clear_many(self, prefixes: Sequence[str]) -> None:
+        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass; an outage is a warning."""
+        if not prefixes:
+            return
+        owned = tuple(self._namespace + p for p in prefixes)
+        pattern = _scan_pattern(self._namespace, prefixes)
         try:
-            async for key in self._client.scan_iter(match=pattern, count=_BATCH):
-                batch.append(key)
-                if len(batch) >= _BATCH:
-                    await self._client.unlink(*batch)
-                    batch = []
-            if batch:
+            keys = [
+                k
+                async for k in self._client.scan_iter(match=pattern, count=_BATCH)
+                if _under(k, owned)
+            ]
+            for batch in _batches(keys):
                 await self._client.unlink(*batch)
         except redis_sync.RedisError as exc:
             log.warning("redis clear failed, entries may be stale: %s", exc)

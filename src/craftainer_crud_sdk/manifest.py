@@ -5,6 +5,7 @@ Members this version does not know are ignored, as the manifest spec requires.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
@@ -171,7 +172,16 @@ class Manifest:
         matches = [r for r in self.resources if r.name == name]
         if api_version is not None:
             matches = [r for r in matches if r.api_version == api_version]
-        return max(matches, key=lambda r: int(r.api_version[1:]), default=None)
+        return max(matches, key=lambda r: _version_order(r.api_version), default=None)
+
+
+_API_VERSION = re.compile(r"v[0-9]+")  # `api_version` of schemas/crud-manifest/v1.json
+
+
+def _version_order(api_version: str) -> tuple[int, str]:
+    """Numeric order of ``vN`` without `int()` (which refuses very long digit strings)."""
+    digits = api_version[1:].lstrip("0")
+    return len(digits), digits
 
 
 def _get[T](obj: _Obj, key: str, kind: type[T] | tuple[type, ...], where: str) -> T:
@@ -241,6 +251,13 @@ def _capabilities(obj: _Obj, where: str) -> Capabilities:
     )
 
 
+def _api_version(obj: _Obj, where: str) -> str:
+    version = _get(obj, "api_version", str, where)
+    if _API_VERSION.fullmatch(version) is None:
+        raise ManifestError(f"{where}.api_version: {version!r} does not match ^v[0-9]+$")
+    return version
+
+
 def _resource(obj: _Obj, where: str) -> Resource:
     schemas = _object(obj, "schemas", where)
     pagination = _object(obj, "pagination", where)
@@ -250,7 +267,7 @@ def _resource(obj: _Obj, where: str) -> Resource:
     return Resource(
         name=_get(obj, "name", str, w),
         title=_get(obj, "title", str, w),
-        api_version=_get(obj, "api_version", str, w),
+        api_version=_api_version(obj, w),
         base_path=_get(obj, "base_path", str, w),
         formats={k: v for k, v in _object(obj, "formats", w).items() if isinstance(v, str)},
         id_field=_get(obj, "id_field", str, w),
