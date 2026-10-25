@@ -68,16 +68,27 @@ class HookedTransport(httpx2.BaseTransport):
     context's cache scope is set from the Authorization header the request actually carries.
     """
 
-    def __init__(self, inner: httpx2.BaseTransport, hooks: Sequence[TransportHook]) -> None:
-        """Wrap `inner`; hooks that implement `BindsTransport` receive `send_raw`."""
+    def __init__(
+        self,
+        inner: httpx2.BaseTransport,
+        hooks: Sequence[TransportHook],
+        *,
+        auth: httpx2.Auth | None = None,
+    ) -> None:
+        """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`.
+
+        `auth` is the client's auth flow, which only `send_authenticated` runs (the client's own
+        requests get it from the `httpx2.Client`).
+        """
         self._inner = inner
         self._hooks = list(hooks)
+        self._auth = auth
         for hook in self._hooks:
             self._bind(hook)
 
     def _bind(self, hook: TransportHook) -> None:
         if isinstance(hook, BindsTransport):
-            hook.bind(self.send_raw)
+            hook.bind(self.send_authenticated)
 
     @property
     def hooks(self) -> tuple[TransportHook, ...]:
@@ -92,6 +103,33 @@ class HookedTransport(httpx2.BaseTransport):
     def send_raw(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks."""
         return self._inner.handle_request(request)
+
+    def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
+        """Send past all hooks, but through the auth flow (token, one refresh-and-retry on 401).
+
+        For a hook's own background requests: they must not re-enter the hooks, yet authenticate
+        like any request: the provider's token replaces an ``Authorization`` header the request
+        already carries (so a copied request never replays a stale token), and without a token the
+        header stays as it is.
+        """
+        if self._auth is None:
+            stamp_scope(request)
+            return self.send_raw(request)
+        flow = self._auth.sync_auth_flow(request)
+        try:
+            current = next(flow)
+            while True:
+                response = self.send_raw(current)
+                try:
+                    current = flow.send(response)
+                except StopIteration:
+                    return response
+                except BaseException:
+                    response.close()  # e.g. the provider failed to refresh
+                    raise
+                response.close()  # the retry replaces it
+        finally:
+            flow.close()
 
     def handle_request(self, request: httpx2.Request) -> httpx2.Response:
         """Run the hooks around the inner transport."""
@@ -118,17 +156,22 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
     """Async twin of `HookedTransport`."""
 
     def __init__(
-        self, inner: httpx2.AsyncBaseTransport, hooks: Sequence[AsyncTransportHook]
+        self,
+        inner: httpx2.AsyncBaseTransport,
+        hooks: Sequence[AsyncTransportHook],
+        *,
+        auth: httpx2.Auth | None = None,
     ) -> None:
-        """Wrap `inner`; hooks that implement `BindsTransport` receive `send_raw`."""
+        """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`."""
         self._inner = inner
         self._hooks = list(hooks)
+        self._auth = auth
         for hook in self._hooks:
             self._bind(hook)
 
     def _bind(self, hook: AsyncTransportHook) -> None:
         if isinstance(hook, BindsTransport):
-            hook.bind(self.send_raw)
+            hook.bind(self.send_authenticated)
 
     @property
     def hooks(self) -> tuple[AsyncTransportHook, ...]:
@@ -143,6 +186,27 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
     async def send_raw(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks."""
         return await self._inner.handle_async_request(request)
+
+    async def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
+        """Async twin of `HookedTransport.send_authenticated`."""
+        if self._auth is None:
+            stamp_scope(request)
+            return await self.send_raw(request)
+        flow = self._auth.async_auth_flow(request)
+        try:
+            current = await anext(flow)
+            while True:
+                response = await self.send_raw(current)
+                try:
+                    current = await flow.asend(response)
+                except StopAsyncIteration:
+                    return response
+                except BaseException:
+                    await response.aclose()  # e.g. the provider failed to refresh
+                    raise
+                await response.aclose()  # the retry replaces it
+        finally:
+            await flow.aclose()
 
     async def handle_async_request(self, request: httpx2.Request) -> httpx2.Response:
         """Run the hooks around the inner transport."""
@@ -653,10 +717,15 @@ class CrudClient:
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider
-        self._transport = HookedTransport(transport or httpx2.HTTPTransport(), hooks)
+        auth = BearerAuth(token_provider) if token_provider is not None else None
+        self._transport = HookedTransport(
+            transport or httpx2.HTTPTransport(),
+            hooks,
+            auth=auth,
+        )
         self._http = httpx2.Client(
             transport=self._transport,
-            auth=BearerAuth(token_provider) if token_provider is not None else None,
+            auth=auth,
             timeout=timeout,
             headers=headers,
         )
@@ -919,10 +988,15 @@ class AsyncCrudClient:
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider
-        self._transport = AsyncHookedTransport(transport or httpx2.AsyncHTTPTransport(), hooks)
+        auth = BearerAuth(token_provider) if token_provider is not None else None
+        self._transport = AsyncHookedTransport(
+            transport or httpx2.AsyncHTTPTransport(),
+            hooks,
+            auth=auth,
+        )
         self._http = httpx2.AsyncClient(
             transport=self._transport,
-            auth=BearerAuth(token_provider) if token_provider is not None else None,
+            auth=auth,
             timeout=timeout,
             headers=headers,
         )
