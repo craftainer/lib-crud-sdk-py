@@ -45,6 +45,14 @@ this directory).
     verifying and releasing.
   - `owasp-scan` — a parallel OWASP Top Ten scan of `src/`.
 
+  Base lists each of these skills one by one in its sync manifest, so an
+  instance adds its own as `skills/<name>/` and lists that directory
+  (as `.claude/skills/<name>/`, or `.claude/agents/<name>.md` for an
+  agent) under `ignore` in `.github/template-sync-manifest.local.yml`. That
+  entry is what keeps the completeness check passing; sync never reads
+  the local file. Don't reuse a base (or removed base) skill or agent
+  name, since sync would overwrite or remove it.
+
   `../CLAUDE.md` points at the two plan skills, so they're used even when
   a request doesn't match their descriptions word for word.
 - The `PreToolUse` hook on `Bash` runs `snip hook`, the
