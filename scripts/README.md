@@ -18,9 +18,11 @@
 - `release-verify-published.sh` — `make verify-published`, which runs after
   `publish-packages` and only when a `*_PUBLISH` variable is set: if
   `PYPI_PUBLISH` is set (`testpypi` or `pypi`), installs `$RELEASE_VERSION`
-  from that index into a fresh venv (plain `python3 -m venv` and `pip`: the
-  job is a bare runner with no secrets), retrying with backoff while it
-  propagates, and imports it. With `PYPI_PUBLISH` unset it does nothing.
+  from that index into a fresh venv built with the pinned uv (the host's, else
+  the Makefile's `UV_IMAGE` container, so the bare runner needs only docker
+  and its older `python3` is never used), retrying with backoff while it
+  propagates, and imports it. It fails at once, naming `requires-python`,
+  when no interpreter satisfies it. With `PYPI_PUBLISH` unset it does nothing.
 - `develop.d/`, `post-create.d/` — instance hook directories, empty apart
   from their own `README.md`; see `docs/TEMPLATE.md`'s "Instance extension
   points".

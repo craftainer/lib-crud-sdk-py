@@ -201,8 +201,16 @@ the failed jobs, which then runs it.
 
 Two runs for the same tag cannot overlap in the `release` job: it sits in a
 `concurrency` group named after the tag (`cancel-in-progress: false`), so the
-second waits and then sees the published release. GitHub keeps at most one
-waiting run per group, and a newer waiting run replaces it.
+second waits and then sees the published release. If that release was cut
+from a different commit than the waiting run's (two dispatches that computed
+the same tag), the waiting run fails instead of publishing its own `dist/`
+under that version (detected only here, after the per-arch images of both runs were
+pushed). GitHub keeps at most one waiting run per group, and a
+newer waiting run replaces it.
+
+Re-run only the *failed jobs* of a run. "Re-run all jobs" runs `version`
+again, which sees the tag the first attempt created and computes the next
+version, so it cuts another release instead of finishing the first.
 
 In `release-check`, if `dist/` holds files owned by another user (the
 devcontainer ran as root), the job takes them over with `sudo`, which must
@@ -296,6 +304,15 @@ with the result. It never pushes directly or auto-merges; a genuine
 resolve. An instance that predates this workflow bootstraps its
 `.github/template-sync-state.json` via the workflow's manual
 `initial_sync_tag`/`template_repo` inputs first.
+
+The workflow runs `template_sync.py apply` from the *new* tag's checkout,
+with that tag's manifest. Do the same when applying a sync by hand: the
+instance's own copy of the script is the old release's, and an older one
+does not expand glob entries such as `scripts/release-*.sh`, so it skips
+those files (a second run with the new script then picks them up). `apply`
+is meant to run once per tag pair: the state file moves to the new tag
+afterwards. Running it again is harmless for files already merged cleanly,
+but it merges a hand-resolved conflict again and re-creates its markers.
 
 An instance that isn't itself a template shouldn't edit that manifest to
 list its own files (`src/`, say): it's `merge`-tier, so edits would

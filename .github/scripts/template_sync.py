@@ -240,7 +240,12 @@ def merge_file(instance_file: Path, base_file: Path, theirs_file: Path) -> bool:
 def apply_merge(
     old_root: Path, new_root: Path, instance_root: Path, paths: set[str]
 ) -> dict[str, list[str]]:
-    """3-way-merge merge-tier paths; return {"merged": [...], "conflicts": [...]}."""
+    """3-way-merge merge-tier paths; return {"merged": [...], "conflicts": [...]}.
+
+    ``merged`` lists only files whose content actually changed, so running the
+    same step again (an instance already at the new version) reports nothing.
+    A path the instance links elsewhere is left alone, as in the replace tier.
+    """
     merged: list[str] = []
     conflicts: list[str] = []
     for path in sorted(paths):
@@ -249,6 +254,8 @@ def apply_merge(
         instance_file = instance_root / path
         if not new_file.exists():
             continue  # removed upstream: a merge-tier file is never deleted automatically.
+        if instance_file.is_symlink():
+            continue  # the instance deliberately links it; merging would write through the link.
         if not instance_file.exists():
             instance_file.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(new_file, instance_file)
@@ -257,6 +264,7 @@ def apply_merge(
         base_content = old_file.read_bytes() if old_file.exists() else b""
         if new_file.read_bytes() == base_content:
             continue  # unchanged upstream since the last sync
+        before = instance_file.read_bytes()
         if old_file.exists():
             conflicted = merge_file(instance_file, old_file, new_file)
         else:
@@ -264,7 +272,10 @@ def apply_merge(
             # version to use as a base, so merge against an empty one.
             with tempfile.NamedTemporaryFile() as empty_base:
                 conflicted = merge_file(instance_file, Path(empty_base.name), new_file)
-        (conflicts if conflicted else merged).append(path)
+        if conflicted:
+            conflicts.append(path)
+        elif instance_file.read_bytes() != before:
+            merged.append(path)
     return {"merged": merged, "conflicts": conflicts}
 
 

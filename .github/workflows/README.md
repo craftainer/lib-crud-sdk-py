@@ -25,9 +25,11 @@
   (no QEMU — see "Architecture matrix" below), each leg uploading its
   `dist/` as `release-assets-<arch>`; the `release-check` job then assembles
   the `dist/`s (failing on a missing arch or a duplicate file name) and
-  runs `make release-check` inside the devcontainer, gating everything
-  after it; the `release` job runs `make finalize` and creates the GitHub
-  release with everything in `dist/`; only then do `publish-packages` and
+  runs `make release-check` inside the devcontainer, gating the GitHub
+  release and package publishing (not the per-arch image `publish`, which
+  already ran in `build`); the `release` job runs `make finalize` and
+  creates the GitHub release with everything in `dist/`; only then do
+  `publish-packages` and
   `verify-published` run, and only for an instance that sets
   `PYPI_PUBLISH`, `NPM_PUBLISH` or `CARGO_PUBLISH`. A partial registry
   failure therefore never withholds the release.

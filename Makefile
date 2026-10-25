@@ -22,11 +22,14 @@ SYFT_VERSION := v1.52.0
 # release.yml runs build/sbom/publish-packages on the bare runner, which has docker but
 # no uv; release-check runs in the devcontainer, which has uv. So use the
 # host's uv when there is one, else the pinned uv image (same uv and Python
-# minor as .devcontainer/Dockerfile). The OIDC variables are forwarded so
+# minor as .devcontainer/Dockerfile; tests/unit/test_release_contract.py
+# fails if the uv version drifts from it). The OIDC variables are forwarded so
 # `uv publish --trusted-publishing always` works inside the container.
-# renovate: datasource=docker depName=ghcr.io/astral-sh/uv
-UV_VERSION := 0.13.0
-UV_IMAGE := ghcr.io/astral-sh/uv:$(UV_VERSION)-python3.14-trixie-slim
+# renovate: datasource=github-releases depName=astral-sh/uv
+UV_VERSION := 0.13.5
+# renovate: datasource=python-version depName=python versioning=docker
+PYTHON_VERSION := 3.14
+UV_IMAGE := ghcr.io/astral-sh/uv:$(UV_VERSION)-python$(PYTHON_VERSION)-trixie-slim
 UV := $(shell command -v uv >/dev/null 2>&1 && echo uv || echo \
 	docker run --rm -u $$(id -u):$$(id -g) -v "$(CURDIR):/src" -w /src \
 	-e UV_CACHE_DIR=/tmp/uv-cache -e UV_PYTHON_DOWNLOADS=never \
@@ -73,7 +76,11 @@ publish:
 # files without uploading.
 publish-packages:
 ifeq ($(PYPI_PUBLISH),)
+ifneq ($(NPM_PUBLISH)$(CARGO_PUBLISH),)
+	@echo "PYPI_PUBLISH is not set -- skipping the PyPI upload (another registry is publishing)."
+else
 	@echo "::warning title=PyPI publish skipped::PYPI_PUBLISH is not set, so this package was NOT published to PyPI. To enable it, set the PYPI_PUBLISH repository variable to 'testpypi' or 'pypi' (Settings > Secrets and variables > Actions > Variables) and re-run the release."
+endif
 else ifeq ($(PYPI_PUBLISH),pypi)
 	$(UV) publish --trusted-publishing always --publish-url $(PYPI_UPLOAD) --check-url $(PYPI_CHECK) dist/*.whl dist/*.tar.gz
 else ifeq ($(PYPI_PUBLISH),testpypi)
@@ -84,10 +91,11 @@ endif
 
 # Once, in release.yml's `verify-published` job, after `publish-packages`
 # succeeded and only when a *_PUBLISH variable is set: installs the published
-# release from the index. A bare runner with no secrets, so plain python3 (not
-# uv) -- see scripts/release-verify-published.sh.
+# release from the index. A bare runner with no secrets and an older python3,
+# so the script builds its venv with the pinned uv (the host's, else the
+# UV_IMAGE container) -- see scripts/release-verify-published.sh.
 verify-published:
-	scripts/release-verify-published.sh
+	UV_IMAGE=$(UV_IMAGE) scripts/release-verify-published.sh
 
 # Runs once after the arch leg, inside the devcontainer, and gates the GitHub
 # release and publishing; dist/ holds the downloaded wheel. Checks the local
