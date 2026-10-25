@@ -324,3 +324,53 @@ async def test_a_stale_hit_after_aclose_schedules_no_revalidation() -> None:
     assert status_of(stale) == "revalidated"  # no SWR any more: plain revalidation
     assert not layer._tasks
     assert len(server.calls) == 2
+
+
+class _TrackedResponse(httpx2.Response):
+    """A response that remembers being closed."""
+
+    closed_by_layer = False
+
+    async def aclose(self) -> None:
+        """Record the close."""
+        self.closed_by_layer = True
+        await super().aclose()
+
+
+class _FailingSet(AsyncMemoryStore):
+    """A store whose writes fail once armed."""
+
+    armed = False
+
+    async def set(self, key: str, entry: CacheEntry, ttl: float | None = None) -> None:
+        """Fail like a broken backend."""
+        if self.armed:
+            raise RuntimeError("store down")
+        await super().set(key, entry, ttl)
+
+
+async def test_background_revalidation_closes_the_raw_response_when_on_response_raises(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A failure while storing the refreshed response must not leak the raw response."""
+    clock = Clock()
+    store = _FailingSet(MemoryStore(clock=clock))
+    layer = AsyncCacheLayer(store, {"heroes": POLICY}, clock=clock)
+    layer.set_events_active("heroes", True)
+    runner = AsyncRunner(layer, Server())
+    layer.bind(runner.raw)
+    await runner.send(make_request())
+    raw = _TrackedResponse(200, json={"id": 1, "name": "b"}, headers={"ETag": '"v2"'})
+
+    async def refreshed(request: httpx2.Request) -> httpx2.Response:
+        """A changed body: the layer must store it, which fails."""
+        return raw
+
+    layer.bind(refreshed)
+    clock.now += 100
+    store.armed = True
+    with caplog.at_level(logging.ERROR):
+        assert status_of(await runner.send(make_request())) == "stale"
+        await drain(layer)
+    assert "background revalidation" in caplog.text
+    assert raw.closed_by_layer

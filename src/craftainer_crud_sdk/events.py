@@ -13,6 +13,7 @@ Events invalidate; they never apply snapshots.
 
 import asyncio
 import logging
+import math
 import random
 import threading
 from collections.abc import Awaitable, Callable, Mapping
@@ -43,6 +44,9 @@ def _log_lost(url: str, exc: Exception) -> None:
 
 BACKOFF_START = 1.0
 BACKOFF_MAX = 30.0
+# Doublings after which the delay is at the cap (also bounds `2**attempt`, which stops fitting a
+# float past ~1024).
+_MAX_EXPONENT = max(0, math.ceil(math.log2(BACKOFF_MAX / BACKOFF_START)))
 DEAD_AFTER_KEEPALIVES = 3
 _ACTIONS = frozenset({"create", "update", "delete", "restore"})
 
@@ -95,7 +99,7 @@ class _Stream:
         return httpx2.Timeout(10.0, read=self.keepalive * DEAD_AFTER_KEEPALIVES)
 
     def backoff(self) -> float:
-        delay = min(BACKOFF_START * 2**self.attempt, BACKOFF_MAX)
+        delay = min(BACKOFF_START * 2 ** min(self.attempt, _MAX_EXPONENT), BACKOFF_MAX)
         self.attempt += 1
         return float(delay * (0.5 + 0.5 * self.jitter()))
 
@@ -206,10 +210,11 @@ class EventSubscriber:
             # Decided under the lock, so a racing subscribe sees a stopping reader. Stop exactly
             # this generation: by the time we get to it a newer one may have replaced it.
             stop, response = self._stop, self._response
+            connected = self._connected
             if last:
                 stop.set()
         try:
-            if listener.on_status is not None and self._connected:
+            if listener.on_status is not None and connected:
                 _guard(listener.on_status, False)
         finally:
             if last and response is not None:

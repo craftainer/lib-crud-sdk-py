@@ -128,3 +128,18 @@ def test_rate_limited_retry_after() -> None:
 def test_headers_default_empty() -> None:
     """Test headers default empty."""
     assert ProblemError(400, "x").headers == {}
+
+
+@pytest.mark.parametrize("raw", ["nan", "inf", "-inf", "-1", "-0.5", "1e999"])
+def test_rate_limited_retry_after_rejects_non_finite_and_negative_values(raw: str) -> None:
+    """A wait must be a finite, non-negative number of seconds; anything else is no usable hint."""
+    error = problem_from_response(httpx2.Response(429, headers={"Retry-After": raw}))
+    assert isinstance(error, RateLimited)
+    assert error.retry_after is None
+
+
+def test_rate_limited_retry_after_accepts_zero() -> None:
+    """Zero seconds stays valid."""
+    zero = problem_from_response(httpx2.Response(429, headers={"Retry-After": "0"}))
+    assert isinstance(zero, RateLimited)
+    assert zero.retry_after == 0.0
