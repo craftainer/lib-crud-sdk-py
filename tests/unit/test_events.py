@@ -63,7 +63,7 @@ def event(action: str = "update", record_id: object = 5, resource: str = "hero")
 class Body(httpx2.SyncByteStream, httpx2.AsyncByteStream):
     """Yields chunks, then ends or raises."""
 
-    def __init__(self, chunks: list[bytes], error: Exception | None = None) -> None:
+    def __init__(self, chunks: list[bytes], error: BaseException | None = None) -> None:
         """Create it."""
         self.chunks = chunks
         self.error = error
@@ -97,7 +97,7 @@ class Script:
 
 
 def sse(
-    chunks: list[bytes], error: Exception | None = None
+    chunks: list[bytes], error: BaseException | None = None
 ) -> Callable[[httpx2.Request], httpx2.Response]:
     """Sse."""
 
@@ -499,10 +499,11 @@ async def test_async_refcount_keeps_stream_until_last_listener_leaves() -> None:
     await client.aclose()
 
 
-def test_a_non_http_error_closes_the_gate_and_a_new_subscribe_restarts(
-    caplog: pytest.LogCaptureFixture,
+def test_a_non_http_error_closes_the_gate_logs_and_reconnects(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The loop dying of a bug still tells listeners; subscribing again starts a new stream."""
+    """A bug in the loop is logged with its traceback; the gate closes, then it reconnects."""
+    monkeypatch.setattr("craftainer_crud_sdk.events.BACKOFF_START", 0.001)
     release = threading.Event()
     layer = CacheLayer(MemoryStore(), {"heroes": CachePolicy()})
     script = Script(
@@ -510,29 +511,52 @@ def test_a_non_http_error_closes_the_gate_and_a_new_subscribe_restarts(
         open_stream(Gate(release, "s2")),
     )
     sub = sync_subscriber(script)
-    with caplog.at_level(logging.ERROR):
+    with caplog.at_level(logging.WARNING):
         unsubscribe = invalidate_on_events(layer, sub, "heroes")
-        thread = sub._thread
-        assert thread is not None
-        thread.join(5)
-    assert not thread.is_alive()
-    assert "event stream /api/heroes/events died" in caplog.text
-    assert not layer.events_active("heroes")  # on_status(False) fired on the way out
-    assert sub._thread is None
-    assert not sub._connected
-    restarted = threading.Event()
-
-    def on_status(up: bool) -> None:
-        """Signal the restart."""
-        if up:
-            restarted.set()
-
-    sub.subscribe(lambda e: None, on_status=on_status)
-    assert restarted.wait(5)
+        for _ in range(5000):
+            if len(script.requests) == 2 and layer.events_active("heroes"):
+                break
+            threading.Event().wait(0.001)
     assert len(script.requests) == 2
+    assert layer.events_active("heroes")  # up again on the second connection
+    failed = [r for r in caplog.records if "failed; reconnecting" in r.getMessage()]
+    assert len(failed) == 1
+    assert failed[0].exc_info is not None
+    assert "decoder bug" in str(failed[0].exc_info[1])
     unsubscribe()
     release.set()
     sub.close()
+    assert not layer.events_active("heroes")
+
+
+def test_a_failing_backoff_ends_the_reader_and_is_logged(caplog: pytest.LogCaptureFixture) -> None:
+    """The safety net: a bug outside the read (here the jitter) is logged and ends the loop."""
+
+    def bad_jitter() -> float:
+        """Fail."""
+        raise ValueError("jitter bug")
+
+    script = Script(sse([hello()]))
+    client = httpx2.Client(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = EventSubscriber(client, EVENTS, jitter=bad_jitter)
+    ups: list[bool] = []
+    sub._listeners.append(_Listener(lambda e: None, None, ups.append))
+    with caplog.at_level(logging.ERROR):
+        sub.run()
+    assert "died" in caplog.text
+    assert ups[-1] is False
+
+
+def test_a_keyboard_interrupt_is_not_swallowed_by_the_reader() -> None:
+    """Only `Exception` is retried: a `BaseException` leaves the loop and tells the listeners."""
+    script = Script(sse([hello()], KeyboardInterrupt()))
+    sub = sync_subscriber(script)
+    ups: list[bool] = []
+    sub._listeners.append(_Listener(lambda e: None, None, ups.append))
+    with pytest.raises(KeyboardInterrupt):
+        sub.run()
+    assert ups[-1] is False
+    assert len(script.requests) == 1
 
 
 class Blocking(httpx2.SyncByteStream):
@@ -601,32 +625,59 @@ def test_close_warns_when_the_thread_does_not_stop(caplog: pytest.LogCaptureFixt
 
 
 @pytest.mark.asyncio
-async def test_async_non_http_error_closes_the_gate_and_resubscribe_restarts(
-    caplog: pytest.LogCaptureFixture,
+async def test_async_non_http_error_closes_the_gate_logs_and_reconnects(
+    caplog: pytest.LogCaptureFixture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """An async loop dying of a bug still sends on_status(False); subscribing again restarts."""
+    """An async loop hit by a bug logs it with a traceback, closes the gate and reconnects."""
+    monkeypatch.setattr("craftainer_crud_sdk.events.BACKOFF_START", 0.001)
     layer = AsyncCacheLayer(AsyncMemoryStore(MemoryStore()), {"heroes": CachePolicy()})
     script = Script(sse([hello()], RuntimeError("decoder bug")), open_stream(AsyncGate("s2")))
     client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
     sub = AsyncEventSubscriber(client, EVENTS)
-    with caplog.at_level(logging.ERROR):
-        unsubscribe = invalidate_on_events(layer, sub, "heroes")
-        task = task_of(sub)
-        assert task is not None
-        await asyncio.gather(task, return_exceptions=True)
-    assert "died" in caplog.text
-    assert not layer.events_active("heroes")
-    assert task_of(sub) is None
-    unsubscribe()
-    invalidate_on_events(layer, sub, "heroes")
-    for _ in range(500):
-        if layer.events_active("heroes"):
-            break
-        await asyncio.sleep(0.001)
-    assert layer.events_active("heroes")
+    with caplog.at_level(logging.WARNING):
+        invalidate_on_events(layer, sub, "heroes")
+        for _ in range(5000):
+            if len(script.requests) == 2 and layer.events_active("heroes"):
+                break
+            await asyncio.sleep(0.001)
     assert len(script.requests) == 2
+    assert layer.events_active("heroes")
+    failed = [r for r in caplog.records if "failed; reconnecting" in r.getMessage()]
+    assert len(failed) == 1
+    assert failed[0].exc_info is not None
     await sub.aclose()
     assert not layer.events_active("heroes")
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_failing_backoff_ends_the_reader_and_is_logged(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """The safety net, async."""
+
+    def bad_jitter() -> float:
+        """Fail."""
+        raise ValueError("jitter bug")
+
+    script = Script(sse([hello()]))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS, jitter=bad_jitter)
+    with caplog.at_level(logging.ERROR):
+        await sub.run()
+    assert "died" in caplog.text
+    await client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_async_reader_does_not_swallow_cancellation_or_base_exceptions() -> None:
+    """Cancelling ends the loop (no retry); a `BaseException` from the stream propagates."""
+    script = Script(sse([hello()], KeyboardInterrupt()))
+    client = httpx2.AsyncClient(transport=httpx2.MockTransport(script), base_url="http://t")
+    sub = AsyncEventSubscriber(client, EVENTS)
+    with pytest.raises(KeyboardInterrupt):
+        await sub.run()
+    assert len(script.requests) == 1
     await client.aclose()
 
 

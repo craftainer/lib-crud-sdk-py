@@ -66,7 +66,9 @@ class CacheStore(Protocol):
     `ttl` is how long the backend may keep the entry (seconds, `None` = backend default); it is
     not freshness, which lives in `CacheEntry`. `clear(prefix)` deletes every key that starts
     with `prefix`; `clear()` deletes everything this store owns (never other data in a shared
-    Redis). Implementations must be thread-safe and must not raise on a missing key.
+    Redis). Implementations must be thread-safe and must not raise on a missing key. A `clear`
+    (and an optional `clear_many(prefixes)`) that fails without raising returns `False`: the
+    layer then treats the affected resources as not fresh until a later reset succeeds.
     """
 
     def get(self, key: str) -> CacheEntry | None:
@@ -81,8 +83,11 @@ class CacheStore(Protocol):
         """Remove `key` if present."""
         ...
 
-    def clear(self, prefix: str | None = None) -> None:
-        """Remove every key starting with `prefix`, or all keys when `prefix` is `None`."""
+    def clear(self, prefix: str | None = None) -> bool | None:
+        """Remove every key starting with `prefix`, or all keys when `prefix` is `None`.
+
+        Returns `False` if the keys could not be removed (the store logged why).
+        """
         ...
 
 
@@ -101,8 +106,11 @@ class AsyncCacheStore(Protocol):
         """Remove `key` if present."""
         ...
 
-    async def clear(self, prefix: str | None = None) -> None:
-        """Remove every key starting with `prefix`, or all keys when `prefix` is `None`."""
+    async def clear(self, prefix: str | None = None) -> bool | None:
+        """Remove every key starting with `prefix`, or all keys when `prefix` is `None`.
+
+        Returns `False` if the keys could not be removed (the store logged why).
+        """
         ...
 
 

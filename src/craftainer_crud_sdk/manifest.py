@@ -6,15 +6,15 @@ Members this version does not know are ignored, as the manifest spec requires.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any
-from urllib.parse import urljoin
 
 import httpx2
 
 from craftainer_crud_sdk.errors import ConnectionFailed, ManifestError, problem_from_response
 from craftainer_crud_sdk.interfaces import EXTENSION_KEY, RequestContext
+from craftainer_crud_sdk.origin import join_same_origin
 
 __all__ = [
     "CATALOG_PATH",
@@ -331,7 +331,9 @@ def parse_manifest(document: object) -> Manifest:
     )
 
 
-def manifest_url_from_catalog(linkset: object, catalog_url: str) -> str:
+def manifest_url_from_catalog(
+    linkset: object, catalog_url: str, allowed_origins: Sequence[str] | None = None
+) -> str:
     """The absolute manifest URL: the first `describedby` link with the manifest profile."""
     entries = linkset.get("linkset") if isinstance(linkset, dict) else None
     for entry in entries if isinstance(entries, list) else []:
@@ -340,7 +342,7 @@ def manifest_url_from_catalog(linkset: object, catalog_url: str) -> str:
             if isinstance(link, dict) and link.get("profile") == PROFILE:
                 href = link.get("href")
                 if isinstance(href, str):
-                    return urljoin(catalog_url, href)
+                    return join_same_origin(catalog_url, href, allowed_origins)
     raise ManifestError(f"the api-catalog has no describedby link with profile {PROFILE}")
 
 
@@ -365,7 +367,11 @@ def _checked_json(response: httpx2.Response) -> object:
 
 
 def load_manifest(
-    http: httpx2.Client, base_url: str, *, manifest_url: str | None = None
+    http: httpx2.Client,
+    base_url: str,
+    *,
+    manifest_url: str | None = None,
+    allowed_origins: Sequence[str] | None = None,
 ) -> Manifest:
     """Fetch and parse the manifest, via api-catalog discovery or a direct `manifest_url`.
 
@@ -374,23 +380,27 @@ def load_manifest(
     """
     try:
         if manifest_url is None:
-            catalog_url = urljoin(base_url, CATALOG_PATH)
+            catalog_url = join_same_origin(base_url, CATALOG_PATH)
             catalog = _checked_json(http.send(_request(http, catalog_url, catalog=True)))
-            manifest_url = manifest_url_from_catalog(catalog, catalog_url)
+            manifest_url = manifest_url_from_catalog(catalog, catalog_url, allowed_origins)
         return parse_manifest(_checked_json(http.send(_request(http, manifest_url, catalog=False))))
     except httpx2.RequestError as exc:
         raise ConnectionFailed(str(exc)) from exc
 
 
 async def aload_manifest(
-    http: httpx2.AsyncClient, base_url: str, *, manifest_url: str | None = None
+    http: httpx2.AsyncClient,
+    base_url: str,
+    *,
+    manifest_url: str | None = None,
+    allowed_origins: Sequence[str] | None = None,
 ) -> Manifest:
     """Async twin of `load_manifest`."""
     try:
         if manifest_url is None:
-            catalog_url = urljoin(base_url, CATALOG_PATH)
+            catalog_url = join_same_origin(base_url, CATALOG_PATH)
             catalog = _checked_json(await http.send(_request(http, catalog_url, catalog=True)))
-            manifest_url = manifest_url_from_catalog(catalog, catalog_url)
+            manifest_url = manifest_url_from_catalog(catalog, catalog_url, allowed_origins)
         response = await http.send(_request(http, manifest_url, catalog=False))
         return parse_manifest(_checked_json(response))
     except httpx2.RequestError as exc:

@@ -69,6 +69,8 @@ _COLLECTIONS = ("list", "stats", "predict")
 _BULK_OPS = frozenset({"bulk_update", "bulk_delete"})
 _RECORD_WRITES = frozenset({"delete", "publish", "restore"})
 _CREATES = frozenset({"create", "clone", "draft"})
+_RESOURCE_PARTS = 2  # "v1", resource
+_KIND_PARTS = 3  # "v1", resource, kind
 _WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 type PolicyKey = str | tuple[str, str]
@@ -133,6 +135,8 @@ class _Core:
         self.cache_manifest = cache_manifest
         self.clock = clock
         self._events_active: dict[str, int] = {}  # connected streams per resource (the gate)
+        self._unsafe: set[str] = set()  # resources whose last clear failed: never fresh
+        self._unsafe_all = False  # a failed clear of unknown scope: no resource is fresh
         self._lock = threading.Lock()
         self._generations: dict[str, int] = {}
 
@@ -197,6 +201,31 @@ class _Core:
 
     def events_active(self, resource: str) -> bool:
         return resource in self._events_active
+
+    def clear_failed(self, prefixes: Sequence[str | None]) -> None:
+        """A store could not clear ``prefixes``: the resources they name are not fresh until reset.
+
+        A prefix that names no resource (or ``None``: everything) affects every resource.
+        """
+        with self._lock:
+            for prefix in prefixes:
+                parts = (prefix or "").split("/")
+                if len(parts) < _RESOURCE_PARTS or parts[0] != "v1" or not parts[1]:
+                    self._unsafe_all = True
+                elif len(parts) < _KIND_PARTS or parts[2] != "filters":  # filters are never fresh
+                    self._unsafe.add(parts[1])
+
+    def cleared(self, resource: str | None) -> None:
+        """A store cleared everything cached for ``resource`` (``None``: for every resource)."""
+        with self._lock:
+            if resource is None:
+                self._unsafe.clear()
+                self._unsafe_all = False
+            else:
+                self._unsafe.discard(resource)
+
+    def _unsafe_resource(self, resource: str | None) -> bool:
+        return self._unsafe_all or (resource is not None and resource in self._unsafe)
 
     def policy_for(self, resource: str | None, version: str) -> CachePolicy | None:
         """The policy of one (resource, api_version), else the resource's, else ``None``."""
@@ -266,6 +295,8 @@ class _Core:
         """
         if policy.revalidate_only or kind in {"manifest", "filters"}:
             return False
+        if self._unsafe_resource(resource):
+            return False
         return kind in STATS_KINDS or self._stream_up(resource)
 
     def _swr_allowed(self, policy: CachePolicy, resource: str | None, kind: str) -> bool:
@@ -275,6 +306,8 @@ class _Core:
         return self._stream_up(resource)
 
     def _stream_up(self, resource: str | None) -> bool:
+        if self._unsafe_resource(resource):
+            return False
         return resource is not None and resource in self._events_active
 
     def _times(self, policy: CachePolicy, resource: str | None, kind: str) -> tuple[float, float]:
@@ -458,23 +491,32 @@ def _split(ops: list[_Op]) -> tuple[list[str], list[_Set | _Delete]]:
     return prefixes, [op for op in ops if not isinstance(op, _Clear)]
 
 
-def _clear_many(store: CacheStore, prefixes: Sequence[str]) -> None:
-    """One pass over the store when it can (`clear_many`), else a clear per prefix."""
+def _clear_many(core: _Core, store: CacheStore, prefixes: Sequence[str]) -> bool:
+    """One pass over the store when it can (`clear_many`), else a clear per prefix.
+
+    A store that reports a failed clear (returns ``False``) leaves its resources not fresh.
+    """
     many = getattr(store, "clear_many", None)
     if many is not None:
-        many(prefixes)
-        return
-    for prefix in prefixes:
-        store.clear(prefix)
+        ok = many(prefixes) is not False
+    else:
+        results = [store.clear(prefix) for prefix in prefixes]  # every prefix, no short-circuit
+        ok = False not in results
+    if not ok:
+        core.clear_failed(prefixes)
+    return ok
 
 
-async def _aclear_many(store: AsyncCacheStore, prefixes: Sequence[str]) -> None:
+async def _aclear_many(core: _Core, store: AsyncCacheStore, prefixes: Sequence[str]) -> bool:
     many = getattr(store, "clear_many", None)
     if many is not None:
-        await many(prefixes)
-        return
-    for prefix in prefixes:
-        await store.clear(prefix)
+        ok = await many(prefixes) is not False
+    else:
+        results = [await store.clear(prefix) for prefix in prefixes]
+        ok = False not in results
+    if not ok:
+        core.clear_failed(prefixes)
+    return ok
 
 
 def _manifest_resources(body: bytes) -> set[str]:
@@ -545,7 +587,7 @@ class CacheLayer:
         expected = self._core.finish(state, ops)
         prefixes, rest = _split(ops)
         if prefixes:
-            _clear_many(self._store, prefixes)
+            _clear_many(self._core, self._store, prefixes)
         for write in rest:
             self._apply(write)
         for late in self._core.late_deletes(state, ops, expected):  # after the stores above
@@ -572,15 +614,20 @@ class CacheLayer:
 
     def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
         """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
-        _clear_many(self._store, self._core.event_clears(resource, action, record_id))
+        _clear_many(self._core, self._store, self._core.event_clears(resource, action, record_id))
 
     def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
-        _clear_many(self._store, self._core.reset_clears(resource))
+        # A successful reset ends the not-fresh period (a failed one re-marked it).
+        if _clear_many(self._core, self._store, self._core.reset_clears(resource)):
+            self._core.cleared(resource)
 
     def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
-        self._store.clear(prefix)
+        if self._store.clear(prefix) is False:
+            self._core.clear_failed([prefix])
+        elif prefix is None:
+            self._core.cleared(None)
 
     def cached_etag(
         self, resource: str, record_id: int, scope: str, api_version: str | None = None
@@ -659,7 +706,7 @@ class AsyncCacheLayer:
         expected = self._core.finish(state, ops)
         prefixes, rest = _split(ops)
         if prefixes:
-            await _aclear_many(self._store, prefixes)
+            await _aclear_many(self._core, self._store, prefixes)
         for write in rest:
             await self._apply(write)
         for late in self._core.late_deletes(state, ops, expected):  # after the stores above
@@ -726,15 +773,21 @@ class AsyncCacheLayer:
 
     async def invalidate_event(self, resource: str, action: str, record_id: int | None) -> None:
         """Clear what an SSE event makes stale (see `keys.event_prefixes`), in every version."""
-        await _aclear_many(self._store, self._core.event_clears(resource, action, record_id))
+        await _aclear_many(
+            self._core, self._store, self._core.event_clears(resource, action, record_id)
+        )
 
     async def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
-        await _aclear_many(self._store, self._core.reset_clears(resource))
+        if await _aclear_many(self._core, self._store, self._core.reset_clears(resource)):
+            self._core.cleared(resource)
 
     async def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
-        await self._store.clear(prefix)
+        if await self._store.clear(prefix) is False:
+            self._core.clear_failed([prefix])
+        elif prefix is None:
+            self._core.cleared(None)
 
     async def cached_etag(
         self, resource: str, record_id: int, scope: str, api_version: str | None = None

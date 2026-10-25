@@ -20,7 +20,6 @@ contract keeps `client` and `events` independent of each other.
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import asdict
-from urllib.parse import urljoin
 
 from craftainer_crud_sdk.cache import (
     AsyncCacheLayer,
@@ -33,6 +32,7 @@ from craftainer_crud_sdk.errors import UnknownResourceError
 from craftainer_crud_sdk.events import AsyncEventSubscriber, EventSubscriber, invalidate_on_events
 from craftainer_crud_sdk.interfaces import AsyncCacheStore, CacheStore
 from craftainer_crud_sdk.manifest import Manifest, Resource
+from craftainer_crud_sdk.origin import join_same_origin
 
 __all__ = ["aenable_cache", "enable_cache"]
 
@@ -103,7 +103,9 @@ def enable_cache(  # noqa: PLR0913
         if stream is None:
             continue
         subscriber = EventSubscriber(
-            client.http, asdict(stream), urljoin(client.base_url, stream.path)
+            client.http,
+            asdict(stream),
+            join_same_origin(client.base_url, stream.path, client.allowed_origins),
         )
         stop = invalidate_on_events(layer, subscriber, resource.name)
         client.add_closer(stop, subscriber.close)
@@ -134,7 +136,9 @@ async def aenable_cache(  # noqa: PLR0913
         if stream is None:
             continue
         subscriber = AsyncEventSubscriber(
-            client.http, asdict(stream), urljoin(client.base_url, stream.path)
+            client.http,
+            asdict(stream),
+            join_same_origin(client.base_url, stream.path, client.allowed_origins),
         )
         stop = invalidate_on_events(layer, subscriber, resource.name)
         client.add_closer(_closing(stop, subscriber))

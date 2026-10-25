@@ -32,6 +32,15 @@ __all__ = [
 
 log = logging.getLogger(__name__)
 
+
+def _log_lost(url: str, exc: Exception) -> None:
+    """Log a lost stream; the reader then backs off and reconnects (any `Exception`)."""
+    if isinstance(exc, httpx2.HTTPError):
+        log.warning("event stream %s lost: %s", url, exc)
+    else:
+        log.exception("event stream %s failed; reconnecting", url, exc_info=exc)
+
+
 BACKOFF_START = 1.0
 BACKOFF_MAX = 30.0
 DEAD_AFTER_KEEPALIVES = 3
@@ -244,9 +253,7 @@ class EventSubscriber:
                 except Exception as exc:
                     if stop.is_set():
                         break  # the stream was closed under the reader
-                    if not isinstance(exc, httpx2.HTTPError):
-                        raise
-                    log.warning("event stream %s lost: %s", stream.url, exc)
+                    _log_lost(stream.url, exc)
                 self._set_connected(False, stop)
                 if stop.is_set():
                     break
@@ -426,8 +433,8 @@ class AsyncEventSubscriber:
             while True:
                 try:
                     await self._read_once()
-                except httpx2.HTTPError as exc:
-                    log.warning("event stream %s lost: %s", stream.url, exc)
+                except Exception as exc:  # CancelledError is a BaseException: it propagates
+                    _log_lost(stream.url, exc)
                 await self._set_connected(False)
                 await asyncio.sleep(stream.backoff())
         except Exception:

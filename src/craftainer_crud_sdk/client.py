@@ -7,7 +7,6 @@ from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mappin
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, TypedDict, Unpack, cast
-from urllib.parse import urljoin
 
 import httpx2
 
@@ -38,6 +37,7 @@ from craftainer_crud_sdk.interfaces import (
     TransportHook,
 )
 from craftainer_crud_sdk.manifest import Manifest, Resource, aload_manifest, load_manifest
+from craftainer_crud_sdk.origin import join_same_origin
 from craftainer_crud_sdk.query import build_query, encode_params
 
 __all__ = [
@@ -247,6 +247,17 @@ class _AsyncIfMatchHook:
 def _checked(response: httpx2.Response) -> httpx2.Response:
     if response.status_code >= 400:  # noqa: PLR2004
         raise problem_from_response(response)
+    if (
+        httpx2.codes.MULTIPLE_CHOICES <= response.status_code < httpx2.codes.BAD_REQUEST
+        and response.status_code != httpx2.codes.NOT_MODIFIED
+    ):
+        location = response.headers.get("location")
+        raise ResponseError(
+            f"unexpected {response.status_code} redirect"
+            + (f" to {location!r}" if location else "")
+            + "; the client never follows redirects",
+            response,
+        )
     return response
 
 
@@ -268,14 +279,21 @@ class _QueryArgs(TypedDict, total=False):
     skip: int | None
     limit: int | None
     include_archived: bool | None
+    only_archived: bool
     include_unpublished: bool | None
 
 
 class _Plan:
     """Builds the requests of one resource; shared by the sync and async handles."""
 
-    def __init__(self, base_url: str, resource: Resource) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        resource: Resource,
+        allowed_origins: Sequence[str] | None = None,
+    ) -> None:
         self._base_url = base_url
+        self._allowed_origins = allowed_origins
         self.resource = resource
 
     def _call(  # noqa: PLR0913
@@ -289,7 +307,9 @@ class _Plan:
         json: object | None = None,
         if_match: str | None = None,
     ) -> _Call:
-        url = urljoin(self._base_url, path) + (f"?{query}" if query else "")
+        url = join_same_origin(self._base_url, path, self._allowed_origins) + (
+            f"?{query}" if query else ""
+        )
         context = RequestContext(
             resource=self.resource.name,
             op=op,
@@ -332,7 +352,7 @@ class _Plan:
         events = self.resource.capabilities.events
         if events is None:
             raise CapabilityError(f"resource {self.resource.name!r} does not support events")
-        return urljoin(self._base_url, events.path)
+        return join_same_origin(self._base_url, events.path, self._allowed_origins)
 
     def list_call(self, **kwargs: Unpack[_QueryArgs]) -> _Call:
         return self._call("GET", "list", self.resource.base_path, self._query(**kwargs))
@@ -446,7 +466,7 @@ class ResourceClient(_Plan):
 
     def __init__(self, client: CrudClient, resource: Resource) -> None:
         """Bind to `client`; get one from `CrudClient.resource`."""
-        super().__init__(client.base_url, resource)
+        super().__init__(client.base_url, resource, client.allowed_origins)
         self._client = client
 
     def list(  # noqa: PLR0913
@@ -457,12 +477,14 @@ class ResourceClient(_Plan):
         skip: int | None = None,
         limit: int | None = None,
         include_archived: bool | None = None,
+        only_archived: bool = False,
         include_unpublished: bool | None = None,
     ) -> JsonList:
         """One page of records."""
         call = self.list_call(
             filters=filters, sort=sort, skip=skip, limit=limit,
-            include_archived=include_archived, include_unpublished=include_unpublished,
+            include_archived=include_archived, only_archived=only_archived,
+            include_unpublished=include_unpublished,
         )  # fmt: skip
         return self._client.send_list(call)
 
@@ -474,6 +496,7 @@ class ResourceClient(_Plan):
         skip: int = 0,
         limit: int | None = None,
         include_archived: bool | None = None,
+        only_archived: bool = False,
         include_unpublished: bool | None = None,
     ) -> Iterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
@@ -485,6 +508,7 @@ class ResourceClient(_Plan):
                 skip=skip,
                 limit=size,
                 include_archived=include_archived,
+                only_archived=only_archived,
                 include_unpublished=include_unpublished,
             )
             yield from page
@@ -576,14 +600,22 @@ class CrudClient:
         manifest_url: str | None = None,
         timeout: httpx2.Timeout | float | None = _TIMEOUT,
         headers: Mapping[str, str] | None = None,
+        allowed_origins: Sequence[str] | None = None,
     ) -> None:
         """`base_url` is the server origin (or any URL on it); `manifest_url` skips discovery.
 
         The client builds its own `httpx2.Client` around `transport` (default: a plain
         `httpx2.HTTPTransport`, which does not read proxy environment variables), wrapped in a
         `HookedTransport` that runs `hooks`.
+
+        Every URL the client builds from the manifest (request paths, the events stream, the
+        catalog's `describedby` link) must be on `base_url`'s origin, or the join raises
+        `ManifestError`, so the bearer token never goes to another host. `allowed_origins`
+        (for example `["https://events.example.com"]`) opts further origins in. An explicit
+        `manifest_url` is trusted as given.
         """
         self.base_url = base_url
+        self.allowed_origins: tuple[str, ...] = tuple(allowed_origins or ())
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider
@@ -643,7 +675,10 @@ class CrudClient:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
         if self._manifest is None or refresh:
             self._manifest = load_manifest(
-                self._http, self.base_url, manifest_url=self._manifest_url
+                self._http,
+                self.base_url,
+                manifest_url=self._manifest_url,
+                allowed_origins=self.allowed_origins,
             )
         return self._manifest
 
@@ -706,7 +741,7 @@ class AsyncResourceClient(_Plan):
 
     def __init__(self, client: AsyncCrudClient, resource: Resource) -> None:
         """Bind to `client`; get one from `AsyncCrudClient.resource`."""
-        super().__init__(client.base_url, resource)
+        super().__init__(client.base_url, resource, client.allowed_origins)
         self._client = client
 
     async def list(  # noqa: PLR0913
@@ -717,12 +752,14 @@ class AsyncResourceClient(_Plan):
         skip: int | None = None,
         limit: int | None = None,
         include_archived: bool | None = None,
+        only_archived: bool = False,
         include_unpublished: bool | None = None,
     ) -> JsonList:
         """One page of records."""
         call = self.list_call(
             filters=filters, sort=sort, skip=skip, limit=limit,
-            include_archived=include_archived, include_unpublished=include_unpublished,
+            include_archived=include_archived, only_archived=only_archived,
+            include_unpublished=include_unpublished,
         )  # fmt: skip
         return await self._client.send_list(call)
 
@@ -734,6 +771,7 @@ class AsyncResourceClient(_Plan):
         skip: int = 0,
         limit: int | None = None,
         include_archived: bool | None = None,
+        only_archived: bool = False,
         include_unpublished: bool | None = None,
     ) -> AsyncIterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
@@ -745,6 +783,7 @@ class AsyncResourceClient(_Plan):
                 skip=skip,
                 limit=size,
                 include_archived=include_archived,
+                only_archived=only_archived,
                 include_unpublished=include_unpublished,
             )
             for record in page:
@@ -839,9 +878,11 @@ class AsyncCrudClient:
         manifest_url: str | None = None,
         timeout: httpx2.Timeout | float | None = _TIMEOUT,
         headers: Mapping[str, str] | None = None,
+        allowed_origins: Sequence[str] | None = None,
     ) -> None:
-        """As `CrudClient`; the token provider may be synchronous or asynchronous."""
+        """As `CrudClient` (also `allowed_origins`); the token provider may be sync or async."""
         self.base_url = base_url
+        self.allowed_origins: tuple[str, ...] = tuple(allowed_origins or ())
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider
@@ -897,7 +938,10 @@ class AsyncCrudClient:
         """The manifest for this caller, loaded once (`refresh=True` reloads)."""
         if self._manifest is None or refresh:
             self._manifest = await aload_manifest(
-                self._http, self.base_url, manifest_url=self._manifest_url
+                self._http,
+                self.base_url,
+                manifest_url=self._manifest_url,
+                allowed_origins=self.allowed_origins,
             )
         return self._manifest
 

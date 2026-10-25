@@ -280,6 +280,19 @@ def test_redis_clear_many_outage_is_a_warning(caplog: pytest.LogCaptureFixture) 
     assert "redis clear failed" in caplog.text
 
 
+def test_redis_clear_reports_success_and_failure(caplog: pytest.LogCaptureFixture) -> None:
+    """`clear` and `clear_many` return False after a Redis error (and True otherwise)."""
+    ok = RedisStore(fakeredis.FakeRedis())
+    assert ok.clear("p/") is True
+    assert ok.clear_many(["p/"]) is True
+    assert ok.clear_many([]) is True
+    bad = RedisStore(Failing())
+    with caplog.at_level(logging.WARNING):
+        assert bad.clear("p/") is False
+        assert bad.clear_many(["p/"]) is False
+    assert "redis clear failed" in caplog.text
+
+
 @pytest.mark.asyncio
 async def test_async_redis_clear_many(
     monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
@@ -304,3 +317,14 @@ async def test_async_redis_clear_many(
     with caplog.at_level(logging.WARNING):
         await AsyncRedisStore(AsyncFailing()).clear_many(["p/"])
     assert "redis clear failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_redis_clear_reports_success_and_failure() -> None:
+    """`clear` and `clear_many` return False after a Redis error (and True otherwise)."""
+    ok = AsyncRedisStore(fakeredis.aioredis.FakeRedis())
+    assert await ok.clear("p/") is True
+    assert await ok.clear_many([]) is True
+    bad = AsyncRedisStore(AsyncFailing())
+    assert await bad.clear("p/") is False
+    assert await bad.clear_many(["p/"]) is False

@@ -170,16 +170,21 @@ def build_query(  # noqa: PLR0913 - one keyword per documented query parameter
     limit_param: str = "limit",
     sort_param: str = "sort",
     include_archived: bool | None = None,
+    only_archived: bool = False,
     include_unpublished: bool | None = None,
 ) -> str:
     """The query string (no leading `?`) for a list, get or bulk call.
 
     `filters` keys are `field` (equality, emitted bare) or `field__op`. Order of parameters:
     `id`, filters sorted by (field, operator), sort, skip, limit, `include_archived`,
-    `include_unpublished`. The sort/skip/limit names are `sort_param`/`skip_param`/`limit_param`
-    (the manifest's `pagination`); the `id` parameter is always `id`. Booleans are emitted
-    whenever they are not `None`.
+    `only_archived`, `include_unpublished`. The sort/skip/limit names are
+    `sort_param`/`skip_param`/`limit_param` (the manifest's `pagination`); the `id` parameter
+    is always `id`. Booleans are emitted whenever they are not `None`, except `only_archived`
+    (list only; implies `include_archived`), which is emitted only when true; true with
+    `include_archived=False` raises `InvalidQueryError`.
     """
+    if only_archived and include_archived is False:
+        raise InvalidQueryError("only_archived cannot be combined with include_archived=False")
     by_name = {f.name: f for f in fields}
     parts: list[str] = []
     if record_id is not None:
@@ -197,6 +202,8 @@ def build_query(  # noqa: PLR0913 - one keyword per documented query parameter
         parts.append(f"{_quote(limit_param)}={text}")
     if include_archived is not None:
         parts.append(f"include_archived={'true' if include_archived else 'false'}")
+    if only_archived:
+        parts.append("only_archived=true")
     if include_unpublished is not None:
         parts.append(f"include_unpublished={'true' if include_unpublished else 'false'}")
     return "&".join(parts)
