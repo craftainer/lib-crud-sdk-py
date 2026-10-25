@@ -202,3 +202,24 @@ async def test_async_failed_clear_revalidates_and_blocks_swr_until_reset() -> No
     await runner.send(make_request())
     assert status(await runner.send(make_request())) == "hit"
     await layer.aclose()
+
+
+def test_a_successful_whole_resource_clear_repairs_and_a_racing_failure_is_kept() -> None:
+    """`clear("v1/heroes/")` ends the flag; a clear that began before another failed cannot."""
+    runner, _, store, layer, _ = sync_setup()
+    runner.send(make_request())
+    store.ok = False
+    layer.clear("v1/heroes/list/")
+    assert status(runner.send(make_request())) == "revalidated"
+    store.ok = True
+    layer.clear("v1/heroes/")
+    runner.send(make_request())
+    assert status(runner.send(make_request())) == "hit"
+    core = layer._core
+    since = core.failures
+    core.clear_failed(["v1/heroes/list/"])  # a concurrent clear fails meanwhile
+    core.cleared("heroes", since)  # the earlier, successful reset must not undo it
+    core.cleared_prefix("", since)
+    core.cleared_prefix("v1/heroes/", since)
+    assert core.events_active("heroes")
+    assert status(runner.send(make_request())) == "revalidated"

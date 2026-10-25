@@ -37,7 +37,7 @@ from craftainer_crud_sdk.interfaces import (
     TransportHook,
 )
 from craftainer_crud_sdk.manifest import Manifest, Resource, aload_manifest, load_manifest
-from craftainer_crud_sdk.origin import join_same_origin
+from craftainer_crud_sdk.origin import check_origins, join_same_origin
 from craftainer_crud_sdk.query import build_query, encode_params
 
 __all__ = [
@@ -615,7 +615,7 @@ class CrudClient:
         `manifest_url` is trusted as given.
         """
         self.base_url = base_url
-        self.allowed_origins: tuple[str, ...] = tuple(allowed_origins or ())
+        self.allowed_origins: tuple[str, ...] = check_origins(allowed_origins)
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider
@@ -882,7 +882,7 @@ class AsyncCrudClient:
     ) -> None:
         """As `CrudClient` (also `allowed_origins`); the token provider may be sync or async."""
         self.base_url = base_url
-        self.allowed_origins: tuple[str, ...] = tuple(allowed_origins or ())
+        self.allowed_origins: tuple[str, ...] = check_origins(allowed_origins)
         self._manifest_url = manifest_url
         self._manifest: Manifest | None = None
         self._token_provider = token_provider

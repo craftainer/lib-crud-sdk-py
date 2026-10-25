@@ -57,6 +57,27 @@ def test_allowed_origins_opt_in() -> None:
         join_same_origin(BASE, f"{EVIL}/x", ["https://other.example"])
 
 
+def test_a_non_http_scheme_is_rejected_and_bad_allowed_origins_fail_early() -> None:
+    """Only http(s) origins are comparable; a bad `allowed_origins` entry is a ValueError."""
+    with pytest.raises(ManifestError):
+        join_same_origin(BASE, "ftp://crud.test/x")
+    for bad in ("events.example.com", "ftp://x.example", "http://"):
+        with pytest.raises(ValueError, match="allowed_origins"):
+            CrudClient(BASE, allowed_origins=[bad])
+
+
+def test_a_catalog_or_manifest_redirect_is_a_manifest_error() -> None:
+    """The discovery requests are never followed either."""
+    transport = httpx2.MockTransport(
+        lambda r: httpx2.Response(302, headers={"Location": "https://evil.example/c"})
+    )
+    with (
+        CrudClient(BASE, transport=transport) as client,
+        pytest.raises(ManifestError, match="never follows redirects"),
+    ):
+        client.manifest()
+
+
 def test_an_unparseable_url_is_a_manifest_error() -> None:
     """A URL httpx cannot parse raises ManifestError, not a bare httpx error."""
     with pytest.raises(ManifestError, match="not a valid URL"):

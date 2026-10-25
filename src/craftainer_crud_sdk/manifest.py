@@ -360,6 +360,10 @@ def _request(
 def _checked_json(response: httpx2.Response) -> object:
     if response.status_code >= 400:  # noqa: PLR2004
         raise problem_from_response(response)
+    if httpx2.codes.MULTIPLE_CHOICES <= response.status_code < httpx2.codes.BAD_REQUEST:
+        raise ManifestError(
+            f"{response.url} answered {response.status_code}; the client never follows redirects"
+        )
     try:
         return response.json()
     except ValueError as exc:

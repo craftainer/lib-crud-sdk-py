@@ -13,14 +13,27 @@ import httpx2
 
 from craftainer_crud_sdk.errors import ManifestError
 
-__all__ = ["join_same_origin"]
+__all__ = ["check_origins", "join_same_origin"]
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
 def _origin(url: str) -> tuple[str, str, int | None]:
     parsed = httpx2.URL(url)
-    return parsed.scheme, parsed.host, parsed.port or _DEFAULT_PORTS.get(parsed.scheme)
+    if parsed.scheme not in _DEFAULT_PORTS or not parsed.host:
+        raise ValueError(f"{url!r} is not an http(s) URL with a host")
+    return parsed.scheme, parsed.host, parsed.port or _DEFAULT_PORTS[parsed.scheme]
+
+
+def check_origins(origins: Sequence[str] | None) -> tuple[str, ...]:
+    """`allowed_origins` as a tuple; `ValueError` for an entry that is no http(s) origin."""
+    checked = tuple(origins or ())
+    for origin in checked:
+        try:
+            _origin(origin)
+        except (httpx2.InvalidURL, ValueError) as exc:
+            raise ValueError(f"allowed_origins entry {origin!r} is not an origin: {exc}") from exc
+    return checked
 
 
 def join_same_origin(base: str, ref: str, allowed_origins: Sequence[str] | None = None) -> str:

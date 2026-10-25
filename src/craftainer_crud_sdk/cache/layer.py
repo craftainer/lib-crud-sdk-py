@@ -43,6 +43,7 @@ from craftainer_crud_sdk.cache.keys import (
     event_prefixes,
     kind_prefix,
     manifest_key,
+    prefix_parts,
     record_prefix,
     resource_prefixes,
     revisions_prefix,
@@ -69,8 +70,6 @@ _COLLECTIONS = ("list", "stats", "predict")
 _BULK_OPS = frozenset({"bulk_update", "bulk_delete"})
 _RECORD_WRITES = frozenset({"delete", "publish", "restore"})
 _CREATES = frozenset({"create", "clone", "draft"})
-_RESOURCE_PARTS = 2  # "v1", resource
-_KIND_PARTS = 3  # "v1", resource, kind
 _WRITE_METHODS = frozenset({"POST", "PATCH", "PUT", "DELETE"})
 
 type PolicyKey = str | tuple[str, str]
@@ -137,6 +136,7 @@ class _Core:
         self._events_active: dict[str, int] = {}  # connected streams per resource (the gate)
         self._unsafe: set[str] = set()  # resources whose last clear failed: never fresh
         self._unsafe_all = False  # a failed clear of unknown scope: no resource is fresh
+        self._failures = 0
         self._lock = threading.Lock()
         self._generations: dict[str, int] = {}
 
@@ -202,27 +202,47 @@ class _Core:
     def events_active(self, resource: str) -> bool:
         return resource in self._events_active
 
+    @property
+    def failures(self) -> int:
+        """How many failed clears so far; a clear that began earlier must not undo a later one."""
+        return self._failures
+
     def clear_failed(self, prefixes: Sequence[str | None]) -> None:
         """A store could not clear ``prefixes``: the resources they name are not fresh until reset.
 
         A prefix that names no resource (or ``None``: everything) affects every resource.
         """
         with self._lock:
+            self._failures += 1
             for prefix in prefixes:
-                parts = (prefix or "").split("/")
-                if len(parts) < _RESOURCE_PARTS or parts[0] != "v1" or not parts[1]:
+                named = prefix_parts(prefix)
+                if named is None:
                     self._unsafe_all = True
-                elif len(parts) < _KIND_PARTS or parts[2] != "filters":  # filters are never fresh
-                    self._unsafe.add(parts[1])
+                elif named[1] != "filters":  # filters are never fresh anyway
+                    self._unsafe.add(named[0])
 
-    def cleared(self, resource: str | None) -> None:
-        """A store cleared everything cached for ``resource`` (``None``: for every resource)."""
+    def cleared(self, resource: str | None, since: int) -> None:
+        """A clear that began at ``failures == since`` emptied ``resource`` (``None``: everything).
+
+        Ignored if another clear failed meanwhile: that one's leftovers may still be cached.
+        """
         with self._lock:
+            if self._failures != since:
+                return
             if resource is None:
                 self._unsafe.clear()
                 self._unsafe_all = False
             else:
                 self._unsafe.discard(resource)
+
+    def cleared_prefix(self, prefix: str | None, since: int) -> None:
+        """`cleared` for a successful ``clear(prefix)``: only a whole resource or everything."""
+        if not prefix:
+            self.cleared(None, since)
+            return
+        named = prefix_parts(prefix)
+        if named is not None and named[1] is None:
+            self.cleared(named[0], since)
 
     def _unsafe_resource(self, resource: str | None) -> bool:
         return self._unsafe_all or (resource is not None and resource in self._unsafe)
@@ -619,15 +639,17 @@ class CacheLayer:
     def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
         # A successful reset ends the not-fresh period (a failed one re-marked it).
+        since = self._core.failures
         if _clear_many(self._core, self._store, self._core.reset_clears(resource)):
-            self._core.cleared(resource)
+            self._core.cleared(resource, since)
 
     def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
+        since = self._core.failures
         if self._store.clear(prefix) is False:
             self._core.clear_failed([prefix])
-        elif prefix is None:
-            self._core.cleared(None)
+        else:
+            self._core.cleared_prefix(prefix, since)
 
     def cached_etag(
         self, resource: str, record_id: int, scope: str, api_version: str | None = None
@@ -779,15 +801,17 @@ class AsyncCacheLayer:
 
     async def clear_resource(self, resource: str) -> None:
         """Clear everything cached for ``resource`` except ``filters`` (after a reconnect)."""
+        since = self._core.failures
         if await _aclear_many(self._core, self._store, self._core.reset_clears(resource)):
-            self._core.cleared(resource)
+            self._core.cleared(resource, since)
 
     async def clear(self, prefix: str | None = None) -> None:
         """Clear keys under ``prefix`` (everything the store owns when ``None``)."""
+        since = self._core.failures
         if await self._store.clear(prefix) is False:
             self._core.clear_failed([prefix])
-        elif prefix is None:
-            self._core.cleared(None)
+        else:
+            self._core.cleared_prefix(prefix, since)
 
     async def cached_etag(
         self, resource: str, record_id: int, scope: str, api_version: str | None = None
