@@ -192,7 +192,14 @@ on them or double-publishing.
 The `release` job is re-runnable too: if the release already exists it
 skips `finalize` and the release creation (a leftover draft is deleted and
 recreated), so re-running failed jobs after a later job failed does not
-fail on the existing release. If `release` itself failed before the release
+fail on the existing release. It first checks that the existing
+release's tag points at the commit this run built, and fails (rather than
+warns) if the tag can't be resolved or points elsewhere. The tag lookup is
+tried up to three times, but only for a transient failure (HTTP 5xx or 429,
+or a network error). A tag that does not exist (the API answers 404, or 422
+"No commit found") or any other permanent error fails at once with a message
+saying so; re-running cannot help, so restore the tag or delete the release
+and run the workflow again. If `release` itself failed before the release
 existed, `finalize` runs again on the re-run, so an instance's `finalize`
 must be safe to repeat (it must not double-apply its side effects).
 `verify-published` runs only after `publish-packages` succeeded, so after a
