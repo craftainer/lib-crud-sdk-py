@@ -16,6 +16,7 @@ __all__ = [
     "event_prefixes",
     "kind_prefix",
     "manifest_key",
+    "prefix_parts",
     "record_prefix",
     "resource_prefix",
     "resource_prefixes",
@@ -66,6 +67,17 @@ def build_key(  # noqa: PLR0913  # a key is these independent facts
 def manifest_key(scope: str) -> str:
     """Key of the manifest document for one caller scope."""
     return f"v1/_manifest/{scope}"
+
+
+def prefix_parts(prefix: str | None) -> tuple[str, str | None] | None:
+    """The ``(resource, kind)`` a key prefix names (``kind`` is ``None`` for a whole resource).
+
+    ``None`` if the prefix does not name a resource (empty, foreign or ``manifest``-level).
+    """
+    parts = (prefix or "").split("/")
+    if len(parts) < 2 or parts[0] != "v1" or not parts[1]:  # noqa: PLR2004
+        return None
+    return parts[1], (parts[2] or None) if len(parts) > 2 else None  # noqa: PLR2004
 
 
 def resource_prefix(resource: str) -> str:

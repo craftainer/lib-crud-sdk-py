@@ -62,6 +62,25 @@ auto_if_match=False)` caches every resource in the manifest unless `resources` n
 because the import contract keeps `client` and `events` independent of each other. It returns the
 layer, whose `clear`, `cached_etag` and `events_active` stay available.
 
+## Requests, origins and errors
+
+- **Same origin by default.** Every URL the client joins onto `base_url` (resource paths, the
+  events stream, the api-catalog `describedby` link) must be on `base_url`'s origin (scheme,
+  host, port). An absolute URL or a protocol-relative `//host/...` on another origin raises
+  `ManifestError` before anything is sent, so a bad manifest cannot make the client send its
+  bearer token to another host. For a split-origin deployment, opt in per origin:
+  `CrudClient(base_url, allowed_origins=["https://events.example.com"])` (also
+  `AsyncCrudClient`; exposed as `client.allowed_origins`). The explicit `manifest_url` you pass
+  yourself is trusted as given.
+- **No redirects.** The client never follows redirects, so a `3xx` other than `304` raises
+  `ResponseError` (the message names the `Location`, `response` holds the response).
+- **Archived rows.** `list` and `iter_all` take `include_archived` and `only_archived=False`.
+  `only_archived=True` returns only archived rows (it implies `include_archived`), is sent as
+  `only_archived=true` right after `include_archived` and only when true, and with
+  `include_archived=False` raises `InvalidQueryError` before any request. It is a list option
+  only (not `stats`, writes or `get`); the wire query is part of the cache key, so archived-only
+  lists never share an entry with normal ones.
+
 ## Caching
 
 Caching is opt-in per resource and is a transport hook, so it works the same for the
@@ -93,6 +112,15 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
   cache miss and a logged warning. Cache keys carry no server identity: a store shared
   between servers or environments must use a per-origin namespace (for `RedisStore`, its
   `namespace` argument, which must not be empty).
+- `Set-Cookie` is never stored or replayed.
+- A cache clear that fails (a Redis error: `RedisStore.clear` / `clear_many` return `False`, and
+  log the warning) marks the affected resource not fresh: no fresh hit, no stale-while-revalidate
+  and no `stats_ttl` window until the next successful reset of that resource (the clear after
+  a stream reconnect, or `layer.clear()` for everything), so every read revalidates. A custom
+  store signals the same by returning `False` from `clear` (and an optional `clear_many`).
+- Event streams reconnect with backoff after any `Exception` in the reader, not only network
+  errors: the failure is logged with its traceback and the freshness gate closes meanwhile.
+  `KeyboardInterrupt`, `CancelledError` and other `BaseException`s are never swallowed.
 - `filters` always revalidate. The freshness gate is counted per resource, so several
   streams of one resource keep it open until the last is gone. `enable_cache` builds a
   policy per resource name and `api_version` from each manifest entry.

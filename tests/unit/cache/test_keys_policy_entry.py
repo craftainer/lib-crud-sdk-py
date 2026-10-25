@@ -17,6 +17,7 @@ from craftainer_crud_sdk.cache.entry import (
 from craftainer_crud_sdk.cache.keys import (
     event_prefixes,
     kind_prefix,
+    prefix_parts,
     record_prefix,
     resource_prefix,
     resource_prefixes,
@@ -161,3 +162,12 @@ def test_merge_headers_replaces_by_name() -> None:
 def test_cache_entry_default_etag_none() -> None:
     """Cache entry default etag none."""
     assert CacheEntry(200, (), b"", 0.0, 0.0, 0.0).etag is None
+
+
+def test_prefix_parts() -> None:
+    """The (resource, kind) a prefix names; None when it names no resource."""
+    assert prefix_parts("v1/heroes/list/") == ("heroes", "list")
+    assert prefix_parts("v1/heroes/") == ("heroes", None)
+    assert prefix_parts("v1/heroes") == ("heroes", None)
+    for none in (None, "", "v1/", "v2/heroes/", "heroes/list/", "v1//list/"):
+        assert prefix_parts(none) is None

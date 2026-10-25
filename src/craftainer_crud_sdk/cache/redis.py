@@ -107,19 +107,27 @@ class RedisStore:
         except redis_sync.RedisError as exc:
             log.warning("redis delete failed: %s", exc)
 
-    def clear(self, prefix: str | None = None) -> None:
-        """Remove keys under ``namespace + prefix``; only this store's namespace is touched."""
+    def clear(self, prefix: str | None = None) -> bool:
+        """Remove keys under ``namespace + prefix``; only this store's namespace is touched.
+
+        Returns ``False`` after a Redis error (logged); the cache layer then revalidates reads.
+        """
         pattern = _glob_escape(self._namespace + (prefix or "")) + "*"
         try:
             for batch in _batches(self._client.scan_iter(match=pattern, count=_BATCH)):
                 self._client.unlink(*batch)
         except redis_sync.RedisError as exc:
             log.warning("redis clear failed, entries may be stale: %s", exc)
+            return False
+        return True
 
-    def clear_many(self, prefixes: Sequence[str]) -> None:
-        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass; an outage is a warning."""
+    def clear_many(self, prefixes: Sequence[str]) -> bool:
+        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass.
+
+        An outage is a warning and returns ``False``.
+        """
         if not prefixes:
-            return
+            return True
         owned = tuple(self._namespace + p for p in prefixes)
         pattern = _scan_pattern(self._namespace, prefixes)
         try:
@@ -130,6 +138,8 @@ class RedisStore:
                 self._client.unlink(*batch)
         except redis_sync.RedisError as exc:
             log.warning("redis clear failed, entries may be stale: %s", exc)
+            return False
+        return True
 
 
 class AsyncRedisStore:
@@ -179,14 +189,17 @@ class AsyncRedisStore:
         except redis_sync.RedisError as exc:
             log.warning("redis delete failed: %s", exc)
 
-    async def clear(self, prefix: str | None = None) -> None:
-        """Remove keys under ``namespace + prefix``; only this store's namespace is touched."""
-        await self.clear_many([prefix or ""])
+    async def clear(self, prefix: str | None = None) -> bool:
+        """As `RedisStore.clear`: ``False`` after a Redis error."""
+        return await self.clear_many([prefix or ""])
 
-    async def clear_many(self, prefixes: Sequence[str]) -> None:
-        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass; an outage is a warning."""
+    async def clear_many(self, prefixes: Sequence[str]) -> bool:
+        """Remove keys under any of ``prefixes`` with one ``SCAN`` pass.
+
+        An outage is a warning and returns ``False``.
+        """
         if not prefixes:
-            return
+            return True
         owned = tuple(self._namespace + p for p in prefixes)
         pattern = _scan_pattern(self._namespace, prefixes)
         try:
@@ -199,3 +212,5 @@ class AsyncRedisStore:
                 await self._client.unlink(*batch)
         except redis_sync.RedisError as exc:
             log.warning("redis clear failed, entries may be stale: %s", exc)
+            return False
+        return True
