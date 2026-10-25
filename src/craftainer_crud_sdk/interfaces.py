@@ -155,12 +155,15 @@ class AsyncTransportHook(Protocol):
 class BindsTransport(Protocol):
     """Optional: hooks that need to send requests themselves (background revalidation).
 
-    The client calls `bind` once with a function that sends through the *raw* transport (below
-    all hooks), so the hook applies its own `on_response` to what comes back.
+    The client calls `bind` once with a function that sends below all hooks (they do not run for
+    it, so the hook applies its own `on_response` to what comes back) but through the client's
+    authentication: the token provider's token is set (replacing an ``Authorization`` header on the
+    request passed in; without a token it stays) and a ``401`` is refreshed and retried once, like
+    any request.
     """
 
     def bind(self, send: SyncSendRaw | SendRaw) -> None:
-        """Receive the raw send function."""
+        """Receive the authenticated, hook-free send function."""
         ...
 
 

@@ -346,6 +346,22 @@ def test_412_evicts_the_record() -> None:
     assert store.get(build_key("heroes", "list", None, "anon")) is not None
 
 
+@pytest.mark.parametrize("status", [404, 410])
+def test_a_write_answered_404_or_410_evicts_the_record(status: int) -> None:
+    """The record is gone for the server: its record entries go, the collections stay."""
+    runner, server, store, _, _ = setup(events=True)
+    runner.send(make_request("record", record_id=7, query="id=7"))
+    runner.send(make_request("list"))
+    runner.send(make_request("revisions", record_id=7))
+    server.status = status
+    runner.send(make_request("update", method="PATCH", record_id=7))
+    assert store.get(build_key("heroes", "revisions", 7, "anon")) is None
+    assert store.get(build_key("heroes", "record", 7, "anon")) is None
+    assert store.get(build_key("heroes", "list", None, "anon")) is not None
+    runner.send(make_request("update", method="PATCH", record_id=None))  # nothing to evict
+    assert store.get(build_key("heroes", "list", None, "anon")) is not None
+
+
 def test_other_write_failures_change_nothing() -> None:
     """Other write failures change nothing."""
     runner, server, store, _, _ = setup(events=True)

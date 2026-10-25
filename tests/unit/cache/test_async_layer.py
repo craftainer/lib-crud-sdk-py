@@ -166,6 +166,20 @@ async def test_writes_and_events() -> None:
     assert layer.events_active("heroes")
 
 
+@pytest.mark.parametrize("status", [404, 410])
+async def test_a_write_answered_404_or_410_evicts_the_record(status: int) -> None:
+    """The record is gone for the server: its record entries go, the collections stay."""
+    runner, server, store, _, _ = setup()
+    await runner.send(make_request("record", record_id=7, query="id=7"))
+    await runner.send(make_request("list"))
+    await runner.send(make_request("revisions", record_id=7))
+    server.status = status
+    await runner.send(make_request("update", method="PATCH", record_id=7))
+    assert store.get(build_key("heroes", "revisions", 7, "anon")) is None
+    assert store.get(build_key("heroes", "record", 7, "anon")) is None
+    assert store.get(build_key("heroes", "list", None, "anon")) is not None
+
+
 async def test_404_evicts_and_non_cached_passes() -> None:
     """404 evicts and non cached passes."""
     runner, server, store, layer, _ = setup()
