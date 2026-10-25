@@ -63,7 +63,7 @@ replace:
   - scripts/post-create.d/README.md
 
   # template-python-package's own layer on top of base: the CodSpeed
-  # benchmark workflow, the release-check script the Makefile's release
+  # benchmark workflow, the release-check and verify-published scripts the Makefile's release
   # contract calls, and the post-create hook that syncs the uv environment.
   # All instance-agnostic, so fixes reach every package through a sync.
   # Hook scripts are listed one by one, not as base's `*.sh` globs: an
@@ -71,6 +71,7 @@ replace:
   # template-sync-manifest.local.yml.
   - .github/workflows/codspeed.yml
   - scripts/release-check.sh
+  - scripts/release-verify-published.sh
   - scripts/post-create.d/10-uv-sync.sh
   # Same precedent as template-fastapi: the Makefile implements the release
   # contract identically for every package (the build, SBOM and PyPI publish

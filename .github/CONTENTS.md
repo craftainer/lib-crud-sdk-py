@@ -11,7 +11,11 @@
   language's own package manifest (e.g. `pyproject.toml`, `Cargo.toml`,
   `package.json`). All patch/minor updates are grouped into a single
   weekly PR that automerges once required checks pass; all major updates
-  are grouped into a separate PR for manual review. Devcontainer
+  are grouped into a separate PR for manual review. A Python minor
+  upgrade (e.g. 3.14 to 3.15) also gets its own PR for manual review:
+  it passes this repo's checks, but for an instance running Python as
+  its app runtime it's a runtime upgrade (its runtime `Dockerfile` must
+  match, and its tools must support the new version). Devcontainer
   features are left out: Renovate can't regenerate their lockfile, so
   they're bumped by hand (see `../.devcontainer/README.md`).
 - `ISSUE_TEMPLATE/` — issue forms (bug report, feature request) shown

@@ -54,11 +54,11 @@ Practices below are distilled from Anthropic's own Claude Code guidance
   touch (see "Before writing anything" above) and write a plan before
   editing.
   Skip planning for a change you could describe as a one-sentence diff.
-  When asked to produce a plan, write it to `docs/plans/` per
-  [`docs/plans/README.md`](docs/plans/README.md) rather than only
-  answering inline — that file also covers what happens to the plan
-  document once its work is executed (folded into an ADR/docs, or
-  removed).
+  When asked to produce a plan, use the `plan-creation` skill
+  (`.claude/skills/plan-creation/`): it writes the plan to `docs/plans/`
+  per [`docs/plans/README.md`](docs/plans/README.md) rather than only
+  answering inline, and that file also covers what happens to the plan
+  once its work is executed.
 - **Report changes after executing.** After any turn that modified,
   created, or deleted files, close with a brief commit message for the
   user's use (a one-line summary plus a short bullet list of the most
@@ -68,7 +68,8 @@ Practices below are distilled from Anthropic's own Claude Code guidance
   --all-files --hook-stage manual`, or whatever lint/type-check/test/e2e
   commands the instance layers on top — and you've shown the actual
   output, not just asserted success. "Looks done" is not a verification
-  step.
+  step. For orchestrated plan work, the executor or lander produces and
+  shows the check output and the orchestrator relays it.
 - **Address root causes.** Fix the underlying issue a failing check
   reports, not the check itself — don't silence a linter/type-checker
   finding with a broad suppression comment just to make output green;
@@ -81,22 +82,22 @@ Practices below are distilled from Anthropic's own Claude Code guidance
 - **Course-correct early.** If the same correction has to be made
   twice on one approach, stop and reconsider the approach itself
   rather than trying a third variation.
+- **Decide alone only where a common best practice exists.** Settle a
+  decision yourself only when primary sources (official docs, RFCs,
+  maintainers) or a clear majority of reputable practice agree, or when
+  a plan, ADR or NFR already requires one option. Otherwise the user
+  decides: sources that disagree, genuine trade-offs, and matters of
+  taste or convention (naming, public API shape, visual design,
+  user-facing defaults). Ask with the options and their trade-offs, the
+  sources, and your own lean labeled as a lean.
 - **Execute multi-item work as an orchestrator.** When executing a
   `docs/plans/` plan, or any task that splits into several independent
   items (closing multiple test coverage gaps, for example), the main
-  session orchestrates rather than implementing: it briefs one
-  `plan-executor` subagent (`.claude/agents/plan-executor.md`, a
-  faster model) per item, each in its own worktree with an explicit
-  write set. It runs items with disjoint write sets in parallel and
-  keeps items that share a file or depend on each other sequential. It
-  merges and verifies the results, and asks the user at every gate. When
-  a subagent escalates, the orchestrator researches, decides, records
-  the decision in the plan's Decision log, and resumes that same
-  subagent; decisions that are really the user's go to the user. Checks
-  that share devcontainer services (integration/e2e suites, load tests)
-  run one at a time in the orchestrator's own lane, never in parallel
-  subagents. See [`docs/plans/README.md`](docs/plans/README.md) for how
-  a plan lays this out.
+  session only orchestrates, deciding and raising user gates; executors
+  and landers (`plan-executor` subagents,
+  `.claude/agents/plan-executor.md`) implement, review, merge, verify
+  and release. Use the `plan-execution` skill
+  (`.claude/skills/plan-execution/`) for how.
 - **Flag devcontainer changes as needing a rebuild.** Editing anything
   under `.devcontainer/` (compose files, `stack/`, Dockerfiles) doesn't
   take effect in the running container — tell the user a rebuild is
