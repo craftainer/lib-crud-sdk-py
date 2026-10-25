@@ -172,8 +172,10 @@ async def test_a_write_answered_404_or_410_evicts_the_record(status: int) -> Non
     runner, server, store, _, _ = setup()
     await runner.send(make_request("record", record_id=7, query="id=7"))
     await runner.send(make_request("list"))
+    await runner.send(make_request("revisions", record_id=7))
     server.status = status
     await runner.send(make_request("update", method="PATCH", record_id=7))
+    assert store.get(build_key("heroes", "revisions", 7, "anon")) is None
     assert store.get(build_key("heroes", "record", 7, "anon")) is None
     assert store.get(build_key("heroes", "list", None, "anon")) is not None
 

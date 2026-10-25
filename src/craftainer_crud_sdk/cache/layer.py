@@ -114,9 +114,7 @@ class _State:
     validated: bool = False
 
 
-_EVICTING_WRITE_STATUSES = frozenset(
-    {HTTPStatus.PRECONDITION_FAILED, HTTPStatus.NOT_FOUND, HTTPStatus.GONE}
-)
+_GONE_WRITE_STATUSES = frozenset({HTTPStatus.NOT_FOUND, HTTPStatus.GONE})
 
 
 class _Core:
@@ -457,14 +455,26 @@ class _Core:
         )
         return [_Clear(kind_prefix(name, "filters")) for name in sorted(names)]
 
+    @staticmethod
+    def _record_evictions(resource: str, record_id: int | None, *, gone: bool) -> list[_Op]:
+        """What a write answered 412 (record prefix) or 404/410 (also its revisions) evicts."""
+        if record_id is None:
+            return []
+        ops: list[_Op] = [_Clear(record_prefix(resource, record_id))]
+        if gone:
+            ops.append(_Clear(revisions_prefix(resource, record_id)))
+        return ops
+
     def _write_ops(self, state: _State, response: httpx2.Response) -> list[_Op]:
         ctx = state.ctx
         resource = cast("str", ctx["resource"])
         record_id = ctx["record_id"]
         op = ctx["op"]
         status = response.status_code
-        if status in _EVICTING_WRITE_STATUSES:  # the record changed or is gone: drop what we hold
-            return [] if record_id is None else [_Clear(record_prefix(resource, record_id))]
+        if status == HTTPStatus.PRECONDITION_FAILED or status in _GONE_WRITE_STATUSES:
+            return self._record_evictions(
+                resource, record_id, gone=status != HTTPStatus.PRECONDITION_FAILED
+            )
         if not HTTPStatus.OK <= status < HTTPStatus.MULTIPLE_CHOICES:
             return []
         collections: list[_Op] = [_Clear(kind_prefix(resource, kind)) for kind in _COLLECTIONS]
