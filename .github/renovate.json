@@ -13,7 +13,7 @@
       "groupName": "major updates"
     },
     {
-      "description": "A Python minor (3.14 -> 3.15) is a runtime upgrade for every instance that runs Python as its app runtime: its own runtime Dockerfile must move in step, and its tools must support the new version. Keep it out of the automerged group, as its own PR for manual review.",
+      "description": "A Python minor (3.14 -> 3.15) is a runtime upgrade for every instance that runs Python as its app runtime: its own runtime Dockerfile must move in step, and its tools must support the new version. This one rule covers the devcontainer's PYTHON_VERSION, the Makefile's PYTHON_VERSION (the uv image tag) and pyproject.toml's requires-python, so they move in one PR. Keep it out of the automerged group, as its own PR for manual review.",
       "matchDatasources": ["python-version"],
       "matchDepNames": ["python"],
       "matchUpdateTypes": ["minor"],
@@ -54,8 +54,21 @@
         "/^Makefile$/"
       ],
       "matchStrings": [
-        "# renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?)\\s*\\n\\w+_VERSION := (?<currentValue>.*)\\s"
+        "# renovate: datasource=(?<datasource>.*?) depName=(?<depName>.*?)( versioning=(?<versioning>.*?))?\\s*\\n\\w+_VERSION := (?<currentValue>.*)\\s"
       ]
+    },
+    {
+      "description": "requires-python's lower bound (>=3.14) moves with the Python minor in the Makefile's uv image tag and the devcontainer; the python minor rule groups all three into one PR.",
+      "customType": "regex",
+      "managerFilePatterns": [
+        "/^pyproject\\.toml$/"
+      ],
+      "matchStrings": [
+        "requires-python = \">=(?<currentValue>3\\.\\d+)\""
+      ],
+      "datasourceTemplate": "python-version",
+      "depNameTemplate": "python",
+      "versioningTemplate": "docker"
     },
     {
       "customType": "regex",

@@ -239,7 +239,8 @@ jobs:
     needs: [version, release-check]
     # Two runs for the same tag (a double dispatch, or a re-run beside a
     # newer run) must not race on the draft deletion, finalize and release
-    # creation below: the second waits and then sees the published release.
+    # creation below: the second waits and then sees the published release
+    # (and fails if that release was cut from another commit).
     # Never cancel a running one (it may be mid-finalize). Per GitHub, at
     # most one run waits per group, and a newer waiting run replaces it.
     concurrency:
@@ -289,6 +290,19 @@ jobs:
               published=true
             fi
           done <<< "$found"
+          # A published release for this tag from another commit means a
+          # concurrent dispatch won the tag: continuing would publish this
+          # run's `dist/` (built from a different commit) under that version
+          # while the release carries the other commit's assets. Fail instead.
+          if [ "$published" = "true" ]; then
+            tag_sha=$(gh api "repos/${GITHUB_REPOSITORY}/commits/refs/tags/${RELEASE_TAG}" --jq .sha) || tag_sha=
+            if [ -z "$tag_sha" ]; then
+              echo "::warning::Could not resolve tag $RELEASE_TAG to a commit; not checking it against $GITHUB_SHA."
+            elif [ "$tag_sha" != "$GITHUB_SHA" ]; then
+              echo "::error::Release $RELEASE_TAG already exists at commit $tag_sha, but this run built $GITHUB_SHA; not publishing it under the same version. Run the workflow again to get the next version."
+              exit 1
+            fi
+          fi
           echo "published=$published" >> "$GITHUB_OUTPUT"
 
       - name: Finalize

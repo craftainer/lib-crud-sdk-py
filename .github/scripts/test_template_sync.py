@@ -197,6 +197,55 @@ class TierPathsGlobTest(unittest.TestCase):
         self.assertFalse((instance / "scripts/other.sh").exists())
 
 
+class ApplyMergeTest(unittest.TestCase):
+    """``template_sync.apply_merge`` reports only real changes and leaves links alone."""
+
+    def setUp(self) -> None:
+        """Create old/new template checkouts and an instance in a temp dir."""
+        self._tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self._tmp.cleanup)
+        self.root = Path(self._tmp.name)
+        self.old, self.new, self.instance = (self.root / n for n in ("old", "new", "instance"))
+        write(self.old / "m.txt", b"a\nb\nc\n", 0o644)
+        write(self.new / "m.txt", b"a\nB\nc\n", 0o644)
+        write(self.instance / "m.txt", b"a\nb\nc\nd\n", 0o644)
+
+    def apply(self) -> dict[str, list[str]]:
+        """Run the merge step for ``m.txt``."""
+        return template_sync.apply_merge(self.old, self.new, self.instance, {"m.txt"})
+
+    def test_second_run_changes_and_reports_nothing(self) -> None:
+        """Re-running the same old->new sync leaves the tree alone and lists no files."""
+        # Regression: a re-run reported every merge-tier file as "merged" again.
+        self.assertEqual(self.apply(), {"merged": ["m.txt"], "conflicts": []})
+        merged = (self.instance / "m.txt").read_bytes()
+        self.assertEqual(merged, b"a\nB\nc\nd\n")
+        self.assertEqual(self.apply(), {"merged": [], "conflicts": []})
+        self.assertEqual((self.instance / "m.txt").read_bytes(), merged)
+
+    def test_instance_already_equal_to_new_is_not_reported(self) -> None:
+        """A file the instance already has at the new version is not "merged"."""
+        write(self.instance / "m.txt", b"a\nB\nc\n", 0o644)
+        self.assertEqual(self.apply(), {"merged": [], "conflicts": []})
+
+    def test_symlinked_instance_file_is_not_merged_through(self) -> None:
+        """Like the replace tier, a deliberately linked instance file is left alone."""
+        target = self.root / "real.txt"
+        target.write_bytes(b"a\nb\nc\nd\n")
+        (self.instance / "m.txt").unlink()
+        (self.instance / "m.txt").symlink_to(target)
+        self.assertEqual(self.apply(), {"merged": [], "conflicts": []})
+        self.assertEqual(target.read_bytes(), b"a\nb\nc\nd\n")
+
+    def test_dangling_symlink_is_not_written_through(self) -> None:
+        """A dangling link is not "missing": copying would create its target."""
+        (self.instance / "m.txt").unlink()
+        dangling = self.root / "nowhere.txt"
+        (self.instance / "m.txt").symlink_to(dangling)
+        self.assertEqual(self.apply(), {"merged": [], "conflicts": []})
+        self.assertFalse(dangling.exists())
+
+
 _SCRIPT_PATH_RE = re.compile(r"(?<![\w.-])(\.github/scripts/[\w.-]+\.sh)\b")
 # What may sit between an interpreter and the script path: a `./` or a
 # `${{ ... }}/` prefix, quotes. Stripped from the text before the path.

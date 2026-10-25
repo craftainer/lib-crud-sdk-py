@@ -119,11 +119,12 @@ with a warning until you opt in, per repository:
    - `testpypi`: publish to TestPyPI;
    - `pypi`: publish to PyPI.
 3. Do the first release with `testpypi` as a dry run (a pre-release channel
-   is enough), confirm that `make verify-published` (the release
-   workflow's last job; it runs after the GitHub release exists, so a failure
-   does not undo the release) installs the published version back from
-   TestPyPI, then register the PyPI pending publisher and
-   switch the variable to `pypi`.
+   is enough), confirm that the release workflow's `verify-published` job (its last
+   job; it runs `make verify-published` after the GitHub release exists, so a
+   failure does not undo the release) installs the published version back
+   from TestPyPI. The target needs the release's `dist/` and
+   `RELEASE_VERSION`, so run it only in that workflow, not locally. Then
+   register the PyPI pending publisher and switch the variable to `pypi`.
 
 The version lives only in the git tag `release.yml` computes; `pyproject.toml`
 stays at `0.0.0` and `make build` stamps `RELEASE_VERSION` into the build

@@ -126,7 +126,7 @@ repos:
         name: scripts-tests (.github/scripts unit tests, executable bits)
         entry: env PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s .github/scripts -p "test_*.py"
         language: system
-        files: ^(\.github/(scripts|workflows)/|\.claude/hooks/|Makefile$)
+        files: ^(\.github/(scripts|workflows)/|\.claude/hooks/|scripts/|Makefile$)
         pass_filenames: false
         stages: [pre-commit, manual]
 

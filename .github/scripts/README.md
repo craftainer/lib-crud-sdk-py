@@ -20,10 +20,10 @@
   the instance working tree, and reads/writes
   `../template-sync-state.json`.
 - `test_template_sync.py` — stdlib `unittest` tests for
-  `template_sync.py`'s replace tier (including the executable bit and
-  symlinked destinations), glob expansion of manifest entries, and a
-  check that every script a workflow runs directly is executable; backs
-  the `scripts-tests` prek hook.
+  `template_sync.py`'s replace and merge tiers (including the executable
+  bit, re-running a merge, and symlinked destinations), glob expansion of
+  manifest entries, and a check that every script a workflow runs directly
+  is executable; backs the `scripts-tests` prek hook.
 - `assemble_dist.py` / `has_make_target.sh` — helpers of
   `../workflows/release.yml`: merge the per-arch `dist/` tarballs
   (validating ARCHES_JSON, rejecting any path two arches both produce,
