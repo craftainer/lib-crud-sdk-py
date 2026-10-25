@@ -27,6 +27,8 @@ CACHE_STATUS_EXTENSION = "craftainer_cache"
 _TRANSFER_HEADERS = frozenset(
     {"content-length", "content-encoding", "transfer-encoding", "connection", "keep-alive"}
 )
+_EXCHANGE_HEADERS = frozenset({"set-cookie"})
+"""Belong to the exchange that carried them: a replay would re-set the client's cookie jar."""
 _VARY_OK = frozenset({"authorization", "accept", "accept-encoding"})
 
 
@@ -59,7 +61,8 @@ def vary_allows_caching(response: httpx2.Response) -> bool:
 
 
 def _storable_headers(items: Iterable[tuple[str, str]]) -> tuple[tuple[str, str], ...]:
-    return tuple((k, v) for k, v in items if k.lower() not in _TRANSFER_HEADERS)
+    skipped = _TRANSFER_HEADERS | _EXCHANGE_HEADERS
+    return tuple((k, v) for k, v in items if k.lower() not in skipped)
 
 
 def build_entry(
@@ -98,17 +101,23 @@ _WIRE_EXTENSIONS = frozenset({"reason_phrase", "http_version", "network_stream"}
 
 
 def to_response(
-    entry: CacheEntry, request: httpx2.Request, *, status: str, extensions: Mapping[str, object]
+    entry: CacheEntry,
+    request: httpx2.Request,
+    *,
+    status: str,
+    extensions: Mapping[str, object],
+    set_cookies: Iterable[str] = (),
 ) -> httpx2.Response:
     """Rebuild a response from an entry, tagged with how the cache produced it.
 
     Extensions that describe the exchange itself (reason phrase, HTTP version, network stream)
-    are not copied from `extensions`: they belong to the response being replaced.
+    are not copied from `extensions`: they belong to the response being replaced. Entries hold no
+    ``Set-Cookie``; ``set_cookies`` are those of the live exchange being rebuilt (a ``304``).
     """
     kept = {k: v for k, v in extensions.items() if k not in _WIRE_EXTENSIONS}
     return httpx2.Response(
         entry.status,
-        headers=list(entry.headers),
+        headers=[*entry.headers, *(("set-cookie", cookie) for cookie in set_cookies)],
         content=entry.body,
         request=request,
         extensions={**kept, CACHE_STATUS_EXTENSION: status},

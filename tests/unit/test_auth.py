@@ -116,7 +116,7 @@ def test_sync_second_401_is_returned() -> None:
     assert len(seen) == 2
 
 
-@pytest.mark.parametrize("fresh", [None, "same"])
+@pytest.mark.parametrize("fresh", [None, "same", ""])
 def test_sync_no_retry_without_a_new_token(fresh: str | None) -> None:
     """Test sync no retry without a new token."""
     seen: list[httpx2.Request] = []
@@ -193,3 +193,21 @@ def test_an_empty_token_without_any_header_is_anonymous() -> None:
         client.send(request)
     assert "authorization" not in seen[0].headers
     assert _scope_of(request) == "anon"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("fresh", [None, "same", ""])
+async def test_async_no_retry_without_a_new_token(fresh: str | None) -> None:
+    """A refresh yielding nothing usable (None, the same or empty token) resends nothing."""
+    seen: list[httpx2.Request] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        """Handler."""
+        seen.append(request)
+        return httpx2.Response(401)
+
+    async with httpx2.AsyncClient(
+        transport=httpx2.MockTransport(handler), auth=BearerAuth(_Tokens("same", fresh))
+    ) as client:
+        assert (await client.get("http://x/")).status_code == 401
+    assert len(seen) == 1
