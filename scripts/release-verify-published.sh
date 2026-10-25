@@ -105,9 +105,12 @@ for ((i = 1; i <= attempts; i++)); do
         echo "OK: import $module ($name $got)"
         exit 0
     fi
-    echo "attempt $i/$attempts failed; retrying in ${delay}s (index propagation)"
-    sleep "$delay"
-    delay=$((delay * 2 > 120 ? 120 : delay * 2))
+    # No message and no sleep after the last attempt: nothing retries.
+    if ((i < attempts)); then
+        echo "attempt $i/$attempts failed; retrying in ${delay}s (index propagation)"
+        sleep "$delay"
+        delay=$((delay * 2 > 120 ? 120 : delay * 2))
+    fi
 done
 echo "$name==$RELEASE_VERSION never appeared on $PYPI_PUBLISH" >&2
 exit 1
