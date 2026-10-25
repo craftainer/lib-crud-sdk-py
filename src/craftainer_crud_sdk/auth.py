@@ -132,7 +132,7 @@ class BearerAuth(httpx2.Auth):
         response = yield request
         if response.status_code == httpx2.codes.UNAUTHORIZED:
             fresh = call_provider(provider, refresh=True)
-            if fresh is not None and fresh != token:
+            if fresh and fresh != token:
                 _apply(request, fresh)
                 yield request
 
@@ -145,6 +145,6 @@ class BearerAuth(httpx2.Auth):
         response = yield request
         if response.status_code == httpx2.codes.UNAUTHORIZED:
             fresh = await acall_provider(self._provider, refresh=True)
-            if fresh is not None and fresh != token:
+            if fresh and fresh != token:
                 _apply(request, fresh)
                 yield request

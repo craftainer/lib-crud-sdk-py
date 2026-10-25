@@ -740,3 +740,40 @@ def test_a_304_rebuild_does_not_copy_the_exchange_extensions() -> None:
     assert response.extensions["keep"] == 1
     assert "network_stream" not in response.extensions
     assert response.reason_phrase == "OK"
+
+
+def _stored_cookies(store: MemoryStore) -> list[str]:
+    """Every Set-Cookie value held by the entries of `store`."""
+    return [
+        v
+        for _, entry in store._data.values()
+        for k, v in entry.headers
+        if k.lower() == "set-cookie"
+    ]
+
+
+def test_set_cookie_is_not_replayed_from_the_cache() -> None:
+    """A cookie belongs to the exchange that set it: a hit must not re-set it in the cookie jar."""
+    runner, server, store, _, _ = setup(events=True)
+    server.headers = {"Set-Cookie": "sid=1"}
+    first = runner.send(make_request())
+    assert first.headers["set-cookie"] == "sid=1"  # the live response keeps it
+    assert all(
+        k.lower() != "set-cookie" for _, entry in store._data.values() for k, _v in entry.headers
+    )
+    hit = runner.send(make_request())
+    assert status_of(hit) == "hit"
+    assert "set-cookie" not in hit.headers
+
+
+def test_a_304_passes_its_own_set_cookie_through_without_storing_it() -> None:
+    """The cookie of the revalidation response reaches the client once and is not stored."""
+    runner, server, store, _, _ = setup()
+    runner.send(make_request())
+    server.headers = {"Set-Cookie": "sid=2"}
+    revalidated = runner.send(make_request())
+    assert status_of(revalidated) == "revalidated"
+    assert revalidated.headers.get_list("set-cookie") == ["sid=2"]
+    assert all(
+        k.lower() != "set-cookie" for _, entry in store._data.values() for k, _v in entry.headers
+    )

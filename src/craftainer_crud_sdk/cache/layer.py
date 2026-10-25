@@ -365,7 +365,11 @@ class _Core:
                 etag=etag,
             )
             rebuilt = to_response(
-                updated, request, status="revalidated", extensions=response.extensions
+                updated,
+                request,
+                status="revalidated",
+                extensions=response.extensions,
+                set_cookies=response.headers.get_list("set-cookie"),
             )
             return rebuilt, [_Set(key, updated, self._retention(fresh, stale))]
         if status == HTTPStatus.OK and self._storable(response):
