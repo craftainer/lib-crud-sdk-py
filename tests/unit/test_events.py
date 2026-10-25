@@ -863,3 +863,43 @@ async def test_async_gate_stays_open_while_another_wiring_is_connected() -> None
     assert not layer.events_active("heroes")
     await sub.aclose()
     await client.aclose()
+
+
+def test_backoff_stays_at_the_cap_for_a_very_long_outage() -> None:
+    """Past ~1024 attempts `2**attempt` no longer converts to a float; the delay stays capped."""
+    sub = sync_subscriber(Script(), {"path": "/e"})
+    stream = sub._stream
+    stream.jitter = lambda: 1.0
+    stream.attempt = 5000
+    assert stream.backoff() == 30.0
+    assert stream.backoff() == 30.0
+    assert stream.attempt <= 5002
+
+
+class _LockChecked(EventSubscriber):
+    """Fails any read of `_connected` made without holding the subscriber's lock."""
+
+    def __init__(self, client: httpx2.Client) -> None:
+        self._flag = False
+        super().__init__(client, EVENTS, jitter=lambda: 0.0)
+
+    @property
+    def _connected(self) -> bool:
+        assert self._lock.locked(), "_connected read outside the lock"
+        return self._flag
+
+    @_connected.setter
+    def _connected(self, value: bool) -> None:
+        self._flag = value
+
+
+def test_unsubscribe_reads_the_connected_flag_under_the_lock() -> None:
+    """`_unsubscribe` decides whether to report the loss from `_connected` under the lock."""
+    client = httpx2.Client(transport=httpx2.MockTransport(Script()), base_url="http://t")
+    sub = _LockChecked(client)
+    sub._thread = threading.Thread()  # pretend a reader runs
+    sub._flag = True
+    statuses: list[bool] = []
+    un = sub.subscribe(lambda e: None, on_status=statuses.append)
+    un()
+    assert statuses == [True, False]

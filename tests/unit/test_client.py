@@ -27,6 +27,7 @@ from craftainer_crud_sdk import (
     UnknownResourceError,
     ValidationFailed,
 )
+from craftainer_crud_sdk.errors import ResponseError
 
 from ._support import (
     BASE,
@@ -136,7 +137,13 @@ def test_reads() -> None:
     """Test reads."""
     seen: list[httpx2.Request] = []
     page = [{"id": 1}]
-    client = _client(lambda r: httpx2.Response(200, json=page), seen=seen)
+
+    def reads(request: httpx2.Request) -> httpx2.Response:
+        """A list or revisions page, or one record."""
+        one = request.url.path == HEROES_V2 and b"id=" in request.url.query
+        return httpx2.Response(200, json=page[0] if one else page)
+
+    client = _client(reads, seen=seen)
     heroes = client.resource("heroes")
     assert heroes.list({"name__icontains": "a b"}, "-name", skip=5, limit=10) == page
     request = _last(seen)
@@ -512,7 +519,10 @@ def test_close_and_context_manager() -> None:
 def test_clone_draft_publish_filters() -> None:
     """Test clone draft publish filters."""
     seen: list[httpx2.Request] = []
-    heroes = _client(seen=seen).resource("heroes")
+    heroes = _client(
+        lambda r: httpx2.Response(200, json=[] if r.url.path.endswith("/filters") else JSON),
+        seen=seen,
+    ).resource("heroes")
     heroes.clone(4)
     assert (_last(seen).method, _last(seen).url.path, _last(seen).url.query) == (
         "POST", f"{HEROES_V2}/clone", b"id=4",
@@ -634,3 +644,65 @@ def test_close_runs_every_closer_even_when_the_first_raises() -> None:
         client.close()
     assert calls == ["close-2", "join-1", "join-2"]
     assert client._http.is_closed
+
+
+def _capped_client(
+    handler: Callable[[httpx2.Request], httpx2.Response], seen: list[httpx2.Request]
+) -> CrudClient:
+    """A client whose manifest has a default page size above the server maximum."""
+    doc = load_doc()
+    for res in doc["resources"]:
+        res["pagination"].update(default_limit=100, max_limit=50)
+
+    def route(request: httpx2.Request) -> httpx2.Response:
+        """Serve the catalog and the doctored manifest; the rest goes to `handler`."""
+        if request.url.path == "/.well-known/api-catalog":
+            return httpx2.Response(200, json=CATALOG)
+        if request.url.path == MANIFEST_PATH:
+            return httpx2.Response(200, json=doc)
+        seen.append(request)
+        return handler(request)
+
+    return CrudClient(BASE, transport=httpx2.MockTransport(route))
+
+
+def test_iter_all_default_page_size_never_exceeds_the_server_maximum() -> None:
+    """`iter_all` without `limit` pages by min(default_limit, max_limit), not a rejected size."""
+    seen: list[httpx2.Request] = []
+    heroes = _capped_client(
+        lambda r: httpx2.Response(
+            200, json=[{"id": i} for i in range(50)] if r.url.params["skip"] == "0" else []
+        ),
+        seen,
+    ).resource("heroes")
+    assert len(list(heroes.iter_all())) == 50
+    assert [r.url.query.decode() for r in seen] == ["skip=0&limit=50", "skip=50&limit=50"]
+
+
+@pytest.mark.parametrize(
+    ("response", "method"),
+    [
+        (httpx2.Response(204), "get"),
+        (httpx2.Response(200), "get"),
+        (httpx2.Response(200, json=[{"id": 1}]), "get"),
+        (httpx2.Response(200, json="x"), "get"),
+        (httpx2.Response(204), "list"),
+        (httpx2.Response(200, json={"id": 1}), "list"),
+    ],
+)
+def test_a_body_of_the_wrong_shape_is_a_response_error_not_a_typed_lie(
+    response: httpx2.Response, method: str
+) -> None:
+    """`send_object` / `send_list` never hand back `None` or the other JSON shape as typed."""
+    heroes = _client(lambda r: response).resource("heroes")
+    with pytest.raises(ResponseError, match=r"expected a JSON (object|array)") as caught:
+        if method == "get":
+            heroes.get(1)
+        else:
+            heroes.list()
+    assert caught.value.response is not None
+
+
+def test_delete_still_accepts_an_empty_body() -> None:
+    """A call whose body is ignored is unaffected."""
+    _client(lambda r: httpx2.Response(204)).resource("heroes").delete(1)

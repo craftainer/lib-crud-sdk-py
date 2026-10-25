@@ -778,7 +778,11 @@ class AsyncCacheLayer:
             self._core.add_validator(fresh_request, fresh_state)
             fresh_request.extensions[STATE_KEY] = fresh_state
             response = await send(fresh_request)
-            result = await self.on_response(fresh_request, response)
+            try:
+                result = await self.on_response(fresh_request, response)
+            except BaseException:
+                await response.aclose()  # `on_response` closes it only on the paths that finish
+                raise
             await result.aclose()
         except Exception:
             log.exception("background revalidation of %s failed", key)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -145,12 +146,13 @@ class RateLimited(ProblemError):  # noqa: N818 - name fixed by the SDK spec
 
     @property
     def retry_after(self) -> float | None:
-        """Seconds to wait, or `None` when absent or an HTTP date."""
+        """Seconds to wait, or `None` when absent, an HTTP date, or not a finite number >= 0."""
         raw = self.headers.get("retry-after")
         try:
-            return None if raw is None else float(raw)
+            seconds = None if raw is None else float(raw)
         except ValueError:
             return None
+        return seconds if seconds is not None and math.isfinite(seconds) and seconds >= 0 else None
 
 
 class ServerError(ProblemError):

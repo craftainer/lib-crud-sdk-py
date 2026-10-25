@@ -261,6 +261,12 @@ def _checked(response: httpx2.Response) -> httpx2.Response:
     return response
 
 
+def _page_size(resource: Resource, limit: int | None) -> int:
+    """The `iter_all` page size: the caller's, else the default capped at the server maximum."""
+    pagination = resource.pagination
+    return min(pagination.default_limit, pagination.max_limit) if limit is None else limit
+
+
 def _decode(response: httpx2.Response) -> object:
     if response.status_code == httpx2.codes.NO_CONTENT or not response.content:
         return None
@@ -270,6 +276,34 @@ def _decode(response: httpx2.Response) -> object:
         raise ResponseError(
             f"{response.status_code} response body is not valid JSON: {exc}", response
         ) from exc
+
+
+def _decode_object(response: httpx2.Response) -> JsonObject:
+    """Decode a body that must be a JSON object.
+
+    An empty body, a ``204`` or another JSON shape is a `ResponseError`, not a ``None`` or a
+    wrongly shaped value handed back under a typed return.
+    """
+    body = _decode(response)
+    if not isinstance(body, dict):
+        raise ResponseError(
+            f"{response.status_code} response: expected a JSON object, got {_shape(body)}", response
+        )
+    return body
+
+
+def _decode_list(response: httpx2.Response) -> JsonList:
+    """Decode a body that must be a JSON array (see `_decode_object`)."""
+    body = _decode(response)
+    if not isinstance(body, list):
+        raise ResponseError(
+            f"{response.status_code} response: expected a JSON array, got {_shape(body)}", response
+        )
+    return body
+
+
+def _shape(body: object) -> str:
+    return "no body" if body is None else type(body).__name__
 
 
 class _QueryArgs(TypedDict, total=False):
@@ -500,7 +534,7 @@ class ResourceClient(_Plan):
         include_unpublished: bool | None = None,
     ) -> Iterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
-        size = self.resource.pagination.default_limit if limit is None else limit
+        size = _page_size(self.resource, limit)
         while True:
             page = self.list(
                 filters,
@@ -686,26 +720,25 @@ class CrudClient:
         """A handle for `name` (the highest `api_version` unless given)."""
         return ResourceClient(self, _lookup(self.manifest(), name, api_version))
 
-    def _send(self, call: _Call, *, decode: bool = True) -> object:
+    def _send(self, call: _Call) -> httpx2.Response:
         request = _build(self._http, call)
         try:
             response = self._http.send(request)
         except httpx2.RequestError as exc:
             raise ConnectionFailed(str(exc)) from exc
-        checked = _checked(response)
-        return _decode(checked) if decode else None
+        return _checked(response)
 
     def send_object(self, call: _Call) -> JsonObject:
         """Internal: run a call that returns a JSON object."""
-        return cast("JsonObject", self._send(call))
+        return _decode_object(self._send(call))
 
     def send_list(self, call: _Call) -> JsonList:
         """Internal: run a call that returns a JSON array."""
-        return cast("JsonList", self._send(call))
+        return _decode_list(self._send(call))
 
     def send_none(self, call: _Call) -> None:
         """Internal: run a call whose body is ignored."""
-        self._send(call, decode=False)
+        self._send(call)
 
     def close(self) -> None:
         """Stop what `add_closer` registered, close the HTTP client and its transport."""
@@ -775,7 +808,7 @@ class AsyncResourceClient(_Plan):
         include_unpublished: bool | None = None,
     ) -> AsyncIterator[JsonObject]:
         """Every record, paging with `skip += limit` until a page shorter than `limit`."""
-        size = self.resource.pagination.default_limit if limit is None else limit
+        size = _page_size(self.resource, limit)
         while True:
             page = await self.list(
                 filters,
@@ -949,26 +982,25 @@ class AsyncCrudClient:
         """A handle for `name` (the highest `api_version` unless given)."""
         return AsyncResourceClient(self, _lookup(await self.manifest(), name, api_version))
 
-    async def _send(self, call: _Call, *, decode: bool = True) -> object:
+    async def _send(self, call: _Call) -> httpx2.Response:
         request = _build(self._http, call)
         try:
             response = await self._http.send(request)
         except httpx2.RequestError as exc:
             raise ConnectionFailed(str(exc)) from exc
-        checked = _checked(response)
-        return _decode(checked) if decode else None
+        return _checked(response)
 
     async def send_object(self, call: _Call) -> JsonObject:
         """Internal: run a call that returns a JSON object."""
-        return cast("JsonObject", await self._send(call))
+        return _decode_object(await self._send(call))
 
     async def send_list(self, call: _Call) -> JsonList:
         """Internal: run a call that returns a JSON array."""
-        return cast("JsonList", await self._send(call))
+        return _decode_list(await self._send(call))
 
     async def send_none(self, call: _Call) -> None:
         """Internal: run a call whose body is ignored."""
-        await self._send(call, decode=False)
+        await self._send(call)
 
     async def aclose(self) -> None:
         """Await what `add_closer` registered, then close the HTTP client and its transport."""

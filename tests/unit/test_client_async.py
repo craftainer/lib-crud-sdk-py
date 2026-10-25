@@ -21,8 +21,9 @@ from craftainer_crud_sdk import (
     ServerError,
     UnknownResourceError,
 )
+from craftainer_crud_sdk.errors import ResponseError
 
-from ._support import BASE, HEROES_V2, MANIFEST_PATH, make_transport
+from ._support import BASE, CATALOG, HEROES_V2, MANIFEST_PATH, load_doc, make_transport
 
 
 class Recorder:
@@ -82,7 +83,11 @@ async def test_every_operation() -> None:
         """Handler."""
         if request.method == "DELETE" and b"id=" in request.url.query:
             return httpx2.Response(204)
-        if request.url.path.endswith("/revisions"):
+        listing = request.method == "GET" and (
+            request.url.path.endswith("/revisions")
+            or (request.url.path == HEROES_V2 and b"id=" not in request.url.query)
+        )
+        if listing:
             return httpx2.Response(200, json=[{"id": 1}])
         return httpx2.Response(200, json={"matched": 1, "ids": [1]})
 
@@ -251,7 +256,10 @@ async def test_transport_close_and_client_lifecycle() -> None:
 async def test_clone_draft_publish_filters() -> None:
     """Test clone draft publish filters."""
     seen: list[httpx2.Request] = []
-    heroes = await _client(lambda r: httpx2.Response(200, json=[]), seen=seen).resource("heroes")
+    heroes = await _client(
+        lambda r: httpx2.Response(200, json=[] if r.url.path.endswith("/filters") else {"id": 4}),
+        seen=seen,
+    ).resource("heroes")
     await heroes.clone(4)
     assert (seen[-1].url.path, seen[-1].url.query) == (f"{HEROES_V2}/clone", b"id=4")
     await heroes.create_draft({"name": "D"})
@@ -315,3 +323,40 @@ async def test_aclose_runs_every_closer_even_when_the_first_raises() -> None:
         await client.aclose()
     assert calls == ["other"]
     assert client._http.is_closed
+
+
+@pytest.mark.asyncio
+async def test_async_iter_all_default_page_size_never_exceeds_the_server_maximum() -> None:
+    """`iter_all` without `limit` pages by min(default_limit, max_limit)."""
+    doc = load_doc()
+    for res in doc["resources"]:
+        res["pagination"].update(default_limit=100, max_limit=50)
+    seen: list[httpx2.Request] = []
+
+    def route(request: httpx2.Request) -> httpx2.Response:
+        """Serve the catalog, the doctored manifest and short pages."""
+        if request.url.path == "/.well-known/api-catalog":
+            return httpx2.Response(200, json=CATALOG)
+        if request.url.path == MANIFEST_PATH:
+            return httpx2.Response(200, json=doc)
+        seen.append(request)
+        return httpx2.Response(
+            200, json=[{"id": i} for i in range(50)] if request.url.params["skip"] == "0" else []
+        )
+
+    heroes = await AsyncCrudClient(BASE, transport=httpx2.MockTransport(route)).resource("heroes")
+    assert len([r async for r in heroes.iter_all()]) == 50
+    assert [r.url.query.decode() for r in seen] == ["skip=0&limit=50", "skip=50&limit=50"]
+
+
+@pytest.mark.asyncio
+async def test_async_a_body_of_the_wrong_shape_is_a_response_error() -> None:
+    """`send_object` / `send_list` never hand back `None` or the other JSON shape as typed."""
+    heroes = await _client(lambda r: httpx2.Response(204)).resource("heroes")
+    with pytest.raises(ResponseError, match="expected a JSON object"):
+        await heroes.get(1)
+    with pytest.raises(ResponseError, match="expected a JSON array"):
+        await heroes.list()
+    heroes = await _client(lambda r: httpx2.Response(200, json=[])).resource("heroes")
+    with pytest.raises(ResponseError, match="expected a JSON object"):
+        await heroes.get(1)
