@@ -23,9 +23,14 @@
   Makefile contract"): `make release-arches` picks the arch matrix;
   `build`/`sbom`/`release-assets`/`publish` run once per arch, natively
   (no QEMU — see "Architecture matrix" below), each leg uploading its
-  `dist/` as `release-assets-<arch>`; then one job downloads them all,
-  runs `make release-check` inside the devcontainer and `make finalize`
-  on the host, and creates a GitHub release with everything in `dist/`.
+  `dist/` as `release-assets-<arch>`; the `release-check` job then assembles
+  the `dist/`s (failing on a missing arch or a duplicate file name) and
+  runs `make release-check` inside the devcontainer, gating everything
+  after it; the `release` job runs `make finalize` and creates the GitHub
+  release with everything in `dist/`; only then do `publish-packages` and
+  `verify-published` run, and only for an instance that sets
+  `PYPI_PUBLISH`, `NPM_PUBLISH` or `CARGO_PUBLISH`. A partial registry
+  failure therefore never withholds the release.
 - `codspeed.yml` — runs `tests/bench` under [CodSpeed](https://codspeed.io/)
   on every pull request and push to `main`; see "Benchmarks" below.
 - `moderate-bug-triage.yml` / `moderate-bug-fix.yml` /
@@ -60,7 +65,7 @@ Each matrix leg can be overridden independently with
 label) — e.g. to point either arch at a self-hosted runner instead of
 GitHub's. This is separate from the plain `CI_RUNNER` variable, which
 still overrides the single-runner jobs (`perf.yml`, `template-sync.yml`,
-and `release.yml`'s `version`/`manifest`/`release` jobs) that aren't
+and `release.yml`'s `version`/`release-check`/`release`/`publish-packages`/`verify-published` jobs) that aren't
 matrixed by arch.
 
 The devcontainer used for local development (`.devcontainer/Dockerfile`'s `develop`
@@ -264,11 +269,13 @@ the registry push) carry the same label set, computed once by
 
 ## PyPI publishing
 
-`make publish` (see the root `README.md`) publishes with PyPI trusted
-publishing, so `release.yml` needs `id-token: write` on the job that runs
-it (template-base's `release.yml` grants it) and no stored token.
+`make publish-packages` (see the root `README.md`) publishes with PyPI
+trusted publishing, so `release.yml` needs `id-token: write` on the job that
+runs it (template-base's `publish-packages` job has it, and only that job)
+and no stored token. It uploads the wheel and sdist the build leg left in
+`dist/`.
 
-- `PYPI_PUBLISH` (variable) — unset skips publishing; `testpypi` publishes
+- `PYPI_PUBLISH` (variable) — unset skips publishing with a `::warning::`; `testpypi` publishes
   to TestPyPI; `pypi` to PyPI. Set it per repository, not per organization:
   each package registers its own pending publisher.
 
@@ -285,15 +292,42 @@ cleanly when the registry isn't configured.
 - `CI_RUNNER_AMD64` / `CI_RUNNER_ARM64` (variables, optional) — runner
   labels for each arch leg, defaulting to `ubuntu-24.04` /
   `ubuntu-24.04-arm`.
+- `PYPI_PUBLISH` (variable, optional) — `testpypi` or `pypi`; selects the
+  index `make publish-packages` uploads to via trusted publishing. Unset
+  skips it.
+- `NPM_PUBLISH` / `CARGO_PUBLISH` (variables, optional) — non-empty makes
+  `make publish-packages` push to npm / crates.io; unset skips it. Setting
+  any of the three is what creates the `publish-packages` job at all.
+  They are passed to that job and to `verify-published`, which is where
+  an instance checks what was published (`release-check` runs before
+  publishing and does not receive them).
+- `NPM_TOKEN` / `CARGO_REGISTRY_TOKEN` (secrets, optional) — bootstrap
+  tokens for the first release of a package, before trusted publishing
+  is configured. Exposed only on the `make publish-packages` step's
+  `env:` in the `publish-packages` job, never job-wide or to any other
+  step or job. An unset secret arrives as an empty
+  string, so the Makefile must treat empty as absent. `NPM_TOKEN` is
+  deliberately not mapped to `NODE_AUTH_TOKEN`: npm's OIDC trusted
+  publishing breaks when that variable is set, even to an empty string,
+  so the npm template's Makefile decides what to do with `NPM_TOKEN`.
 
 ## Do
 
 - Give `release.yml` and `template-sync.yml` `contents: write` and
   nothing broader (`template-sync.yml` also needs `pull-requests:
   write`, for nothing else); leave `checks.yml` at `contents: read`.
-- Keep `id-token: write` on `release.yml`'s `build` job only (the one
-  running `make publish`): PyPI trusted publishing via GitHub OIDC. It
-  is unused by repos that don't publish to PyPI.
+- Keep `id-token: write` on `release.yml`'s `publish-packages` job only
+  (PyPI, npm and crates.io trusted publishing via GitHub OIDC). GitHub
+  permissions are per job, not per step, and that job's `if:` on the
+  `*_PUBLISH` variables means an image-only instance never starts it, so
+  it never requests an OIDC token. `build` (per arch) has no `id-token`.
+- Keep `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN` on the `make
+  publish-packages` step's `env:` only.
+- Pass `GITHUB_TOKEN` to a `devcontainers/ci` or `build-push-action` step
+  that builds the devcontainer image (step `env:`, not the action's
+  `env:` input), so `scripts/develop.sh`'s downloads are authenticated:
+  `compose.yml` hands it to the build as the optional `github_token`
+  secret, never a build arg.
 
 ## Don't
 
