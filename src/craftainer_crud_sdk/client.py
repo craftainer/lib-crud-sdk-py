@@ -396,7 +396,6 @@ class _Plan:
         base_url: str,
         resource: Resource,
         allowed_origins: Sequence[str] | None = None,
-        allow_insecure_http: bool = False,
     ) -> None:
         self._base_url = base_url
         self._allowed_origins = allowed_origins
