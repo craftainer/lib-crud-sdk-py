@@ -15,6 +15,7 @@ from craftainer_crud_sdk.auth import (
     acall_provider,
     authorization_scope,
     call_provider,
+    check_transport,
     sent_authorization,
     stamp_scope,
 )
@@ -74,6 +75,7 @@ class HookedTransport(httpx2.BaseTransport):
         hooks: Sequence[TransportHook],
         *,
         auth: httpx2.Auth | None = None,
+        allow_insecure_http: bool = False,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`.
 
@@ -83,6 +85,7 @@ class HookedTransport(httpx2.BaseTransport):
         self._inner = inner
         self._hooks = list(hooks)
         self._auth = auth
+        self._allow_insecure_http = allow_insecure_http
         for hook in self._hooks:
             self._bind(hook)
 
@@ -101,7 +104,8 @@ class HookedTransport(httpx2.BaseTransport):
         self._bind(hook)
 
     def send_raw(self, request: httpx2.Request) -> httpx2.Response:
-        """Send past all hooks."""
+        """Send past all hooks (a credential over plain http to a remote host is refused first)."""
+        check_transport(request, allow_insecure_http=self._allow_insecure_http)
         return self._inner.handle_request(request)
 
     def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
@@ -161,11 +165,13 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
         hooks: Sequence[AsyncTransportHook],
         *,
         auth: httpx2.Auth | None = None,
+        allow_insecure_http: bool = False,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`."""
         self._inner = inner
         self._hooks = list(hooks)
         self._auth = auth
+        self._allow_insecure_http = allow_insecure_http
         for hook in self._hooks:
             self._bind(hook)
 
@@ -184,7 +190,8 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
         self._bind(hook)
 
     async def send_raw(self, request: httpx2.Request) -> httpx2.Response:
-        """Send past all hooks."""
+        """Send past all hooks (a credential over plain http to a remote host is refused first)."""
+        check_transport(request, allow_insecure_http=self._allow_insecure_http)
         return await self._inner.handle_async_request(request)
 
     async def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
@@ -699,6 +706,7 @@ class CrudClient:
         timeout: httpx2.Timeout | float | None = _TIMEOUT,
         headers: Mapping[str, str] | None = None,
         allowed_origins: Sequence[str] | None = None,
+        allow_insecure_http: bool = False,
     ) -> None:
         """`base_url` is the server origin (or any URL on it); `manifest_url` skips discovery.
 
@@ -711,6 +719,12 @@ class CrudClient:
         `ManifestError`, so the bearer token never goes to another host. `allowed_origins`
         (for example `["https://events.example.com"]`) opts further origins in. An explicit
         `manifest_url` is trusted as given.
+
+        A request that carries an `Authorization` header is refused with `InsecureTransportError`
+        before it is sent when its URL is plain `http:` and the host is not loopback (`localhost`,
+        `*.localhost`, `127.0.0.0/8`, `::1`). The check runs on the request as it is sent (the
+        auth flow, a configured header, hook background requests and event streams included).
+        `allow_insecure_http=True` lifts it, for a trusted network only.
         """
         self.base_url = base_url
         self.allowed_origins: tuple[str, ...] = check_origins(allowed_origins)
@@ -722,6 +736,7 @@ class CrudClient:
             transport or httpx2.HTTPTransport(),
             hooks,
             auth=auth,
+            allow_insecure_http=allow_insecure_http,
         )
         self._http = httpx2.Client(
             transport=self._transport,
@@ -981,8 +996,9 @@ class AsyncCrudClient:
         timeout: httpx2.Timeout | float | None = _TIMEOUT,
         headers: Mapping[str, str] | None = None,
         allowed_origins: Sequence[str] | None = None,
+        allow_insecure_http: bool = False,
     ) -> None:
-        """As `CrudClient` (also `allowed_origins`); the token provider may be sync or async."""
+        """As `CrudClient` (also its options); the token provider may be sync or async."""
         self.base_url = base_url
         self.allowed_origins: tuple[str, ...] = check_origins(allowed_origins)
         self._manifest_url = manifest_url
@@ -993,6 +1009,7 @@ class AsyncCrudClient:
             transport or httpx2.AsyncHTTPTransport(),
             hooks,
             auth=auth,
+            allow_insecure_http=allow_insecure_http,
         )
         self._http = httpx2.AsyncClient(
             transport=self._transport,

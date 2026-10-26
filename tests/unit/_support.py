@@ -12,7 +12,7 @@ from craftainer_crud_sdk import Manifest, Resource, parse_manifest
 FIXTURES = Path(__file__).parent.parent / "fixtures" / "manifest"
 PROFILE = "https://craftainer.github.io/schemas/crud-manifest/v1"
 MANIFEST_PATH = "/api/_crud/manifest"
-BASE = "http://crud.test"
+BASE = "https://crud.test"
 HEROES_V2 = "/api/crud/v1/heroes/v2/json"
 HEROES_V1 = "/api/crud/v1/heroes/v1/json"
 

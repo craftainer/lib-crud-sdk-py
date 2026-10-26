@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+import ipaddress
 from collections.abc import AsyncGenerator, Generator
 from typing import cast
 
 import httpx2
 
+from craftainer_crud_sdk.errors import InsecureTransportError
 from craftainer_crud_sdk.interfaces import (
     EXTENSION_KEY,
     AsyncTokenProvider,
@@ -22,6 +24,8 @@ __all__ = [
     "authorization_scope",
     "cache_scope",
     "call_provider",
+    "check_transport",
+    "is_insecure_remote",
     "sent_authorization",
     "stamp_scope",
     "static_token",
@@ -62,6 +66,47 @@ def stamp_scope(request: httpx2.Request) -> None:
     context = cast("RequestContext | None", request.extensions.get(EXTENSION_KEY))
     if context is not None:
         context["scope"] = authorization_scope(request.headers.get("Authorization"))
+
+
+def is_insecure_remote(url: httpx2.URL) -> bool:
+    """Whether `url` is plain ``http:`` to a host that is not loopback.
+
+    Loopback is ``localhost``, ``*.localhost``, ``127.0.0.0/8`` and ``::1``, judged on the parsed
+    host (so ``http://localhost.evil.example`` is not loopback). ``https:`` and any other scheme
+    are never insecure here. A host that is not a literal address in those ranges (``127.1``, an
+    IPv4-mapped IPv6 address) counts as remote: the check fails closed.
+    """
+    if url.scheme != "http":
+        return False
+    host = url.host.lower().removesuffix(".")  # a trailing dot names the same host
+    if host == "localhost" or host.endswith(".localhost"):
+        return False
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError:
+        return True
+    if isinstance(address, ipaddress.IPv4Address):
+        return address not in ipaddress.ip_network("127.0.0.0/8")
+    return address != ipaddress.IPv6Address("::1")
+
+
+def check_transport(request: httpx2.Request, *, allow_insecure_http: bool) -> None:
+    """Raise `InsecureTransportError` before a request carrying credentials goes over plain http.
+
+    Judged on the request as it is about to be sent (the header it really has), so a token set
+    by the auth flow, a header configured on the client, or a URL rewritten by a hook is covered.
+    Anonymous requests and loopback hosts are never refused.
+    """
+    if (
+        not allow_insecure_http
+        and "Authorization" in request.headers
+        and is_insecure_remote(request.url)
+    ):
+        origin = f"{request.url.scheme}://{request.url.netloc.decode()}"
+        raise InsecureTransportError(
+            f"refusing to send credentials over plain http to {origin}; "
+            "use https, or pass allow_insecure_http=True to the client to allow it"
+        )
 
 
 def static_token(token: str | None) -> TokenProvider:
