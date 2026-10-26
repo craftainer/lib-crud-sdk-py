@@ -29,10 +29,10 @@ CATALOG_PATH = "/.well-known/api-catalog"
     [
         f"{EVIL}/x",
         "//evil.example/x",
-        "https://crud.test/x",  # same host, other scheme
-        "http://crud.test:8080/x",  # same host, other port
-        "http://crud.test.evil.example/x",
-        "http://crud.test@evil.example/x",
+        "http://crud.test/x",  # same host, other scheme
+        "https://crud.test:8443/x",  # same host, other port
+        "https://crud.test.evil.example/x",
+        "https://crud.test@evil.example/x",
     ],
 )
 def test_foreign_urls_are_rejected(ref: str) -> None:
@@ -42,7 +42,7 @@ def test_foreign_urls_are_rejected(ref: str) -> None:
 
 
 @pytest.mark.parametrize(
-    "ref", ["/a/b", "a/b", "", "?q=1", f"{BASE}/x", "//crud.test/x", "http://CRUD.test:80/x"]
+    "ref", ["/a/b", "a/b", "", "?q=1", f"{BASE}/x", "//crud.test/x", "https://CRUD.test:443/x"]
 )
 def test_same_origin_urls_are_joined(ref: str) -> None:
     """Relative references and same-origin absolute ones pass, default port included."""
@@ -52,7 +52,7 @@ def test_same_origin_urls_are_joined(ref: str) -> None:
 def test_allowed_origins_opt_in() -> None:
     """A listed origin is accepted (path ignored, default port normalised); others are not."""
     assert join_same_origin(BASE, f"{EVIL}/x", [EVIL]) == f"{EVIL}/x"
-    assert join_same_origin(BASE, "//evil.example/x", ["http://EVIL.example:80/ignored"])
+    assert join_same_origin(BASE, "//evil.example/x", ["https://EVIL.example:443/ignored"])
     with pytest.raises(ManifestError):
         join_same_origin(BASE, f"{EVIL}/x", ["https://other.example"])
 
@@ -151,9 +151,9 @@ def test_a_foreign_events_url_is_rejected_by_events_url_and_enable_cache() -> No
         with pytest.raises(ManifestError):
             enable_cache(client, MemoryStore(), resources=["heroes"])
     with CrudClient(
-        BASE, transport=_transport(doc, []), allowed_origins=["http://evil.example"]
+        BASE, transport=_transport(doc, []), allowed_origins=["https://evil.example"]
     ) as ok:
-        assert _heroes(ok).events_url() == "http://evil.example/events"
+        assert _heroes(ok).events_url() == "https://evil.example/events"
 
 
 def test_a_foreign_describedby_href_is_rejected_but_manifest_url_is_trusted() -> None:

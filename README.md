@@ -72,6 +72,17 @@ layer, whose `clear`, `cached_etag` and `events_active` stay available.
   `CrudClient(base_url, allowed_origins=["https://events.example.com"])` (also
   `AsyncCrudClient`; exposed as `client.allowed_origins`). The explicit `manifest_url` you pass
   yourself is trusted as given.
+- **Plain http.** A request that carries an `Authorization` header is refused with
+  `InsecureTransportError` (a `ClientError`, raised before anything is sent) when its URL is
+  `http:` and the host is not loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`, judged
+  on the parsed host; any other form of address counts as remote). The check sits in the hooked
+  transport that wraps every request of the client, so it judges the request as it is sent: the
+  token the auth flow sets (including the refresh-and-retry after a `401`), a header configured on
+  the client, a URL a hook rewrote, a hook's background revalidation and the event streams
+  (which use `client.http`; the reader logs the refusal and retries with backoff). Anonymous
+  requests over http are unaffected. To allow it on a trusted network, pass
+  `CrudClient(base_url, allow_insecure_http=True)` (also `AsyncCrudClient`). `BearerAuth` used on
+  your own `httpx2` client, outside the SDK's clients, is not covered. See ADR 0004.
 - **No redirects.** The client never follows redirects, so a `3xx` other than `304` raises
   `ResponseError` (the message names the `Location`, `response` holds the response).
 - **Archived rows.** `list` and `iter_all` take `include_archived` and `only_archived=False`.

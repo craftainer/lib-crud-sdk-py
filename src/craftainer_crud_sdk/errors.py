@@ -16,6 +16,7 @@ __all__ = [
     "ConnectionFailed",
     "CrudError",
     "Forbidden",
+    "InsecureTransportError",
     "InvalidQueryError",
     "Locked",
     "ManifestError",
@@ -48,6 +49,12 @@ class CapabilityError(ClientError):
 
 class InvalidQueryError(ClientError):
     """A filter, sort or paging argument is not valid for the resource."""
+
+
+class InsecureTransportError(ClientError):
+    """A request carrying an ``Authorization`` header was about to go over plain ``http:`` to a
+    non-loopback host. Nothing was sent. Use ``https:``, or opt in with ``allow_insecure_http``.
+    """
 
 
 class ManifestError(ClientError):
