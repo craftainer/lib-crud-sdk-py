@@ -6,7 +6,7 @@ name = "craftainer-crud-sdk"
 # real version, stamped into the build at release time without a commit.
 version = "0.0.0"
 description = "Python client SDK for craftainer-crud APIs: sync and async, caching, SSE events"
-license = "GPL-3.0-or-later"
+license = "GPL-3.0-only"
 readme = "README.md"
 requires-python = ">=3.14"
 dependencies = ["httpx2>=2.10,<3"]
