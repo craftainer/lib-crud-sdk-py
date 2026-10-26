@@ -396,7 +396,7 @@ template-base
 Naming: a library repo is `lib-<name>-<py|ts|rs>` and an app repo is
 `template-<runtime>`; the registry package is `craftainer-<name>` on PyPI and
 crates.io and `@craftainer/<name>` on npm (`lib-crud-sdk-ts` publishes
-`@craftainer/crud-sdk`). Libraries declare `GPL-3.0-or-later` in their package
+`@craftainer/crud-sdk`). Libraries declare `GPL-3.0-only` in their package
 manifest; base itself ships the GPL v3 text in `LICENSE`.
 
 Each mid-layer template is an instance of base that is itself a template. It
