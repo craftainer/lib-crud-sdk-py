@@ -106,7 +106,14 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
 - Events clear cached prefixes; the first handshake of a stream and every reconnect clear
   the resource. A successful write
   updates or clears what it changed (`PATCH` writes its response through as the record
-  entry), and a `412` evicts the record.
+  entry), and a write the server refuses with `412`, `404` or `410` evicts the record's cached
+  reads (its entry and its revisions), as a read answered `404`/`410` does.
+- Entries are scoped per caller: the key carries `anon` or a hash of the whole bearer token
+  (never the unverified JWT `sub`), plus the resource's `api_version`, so two callers never
+  share an entry and two API versions of one resource never do either. A token refresh
+  therefore starts a fresh set of entries.
+- A stale-while-revalidate background request goes through the same `BearerAuth` as any other
+  call (a `401` refreshes the token and retries once) and does not re-enter the cache hooks.
 - Stores: `MemoryStore` (LRU plus TTL) and, with the `redis` extra,
   `craftainer_crud_sdk.cache.redis.RedisStore` / `AsyncRedisStore`. A Redis outage is a
   cache miss and a logged warning. Cache keys carry no server identity: a store shared
