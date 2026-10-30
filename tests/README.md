@@ -5,7 +5,9 @@ Two independent suites:
 - `unit/` — no external services. A plain `uv run pytest` collects only this
   directory and enforces 100% line and branch coverage of
   `src/craftainer_crud_sdk` (`[tool.coverage.report]` in
-  `pyproject.toml`).
+  `pyproject.toml`). `unit/test_url_parity.py` runs the URL parity table shared
+  with lib-crud-sdk-ts (`fixtures/url-parity/`; refresh steps in
+  `fixtures/README.md`).
 - `bench/` — `pytest-benchmark` microbenchmarks, excluded from the default
   run (`--ignore=tests/bench` in `addopts`). Run locally with
   `uv run pytest tests/bench --no-cov`, or under CodSpeed with

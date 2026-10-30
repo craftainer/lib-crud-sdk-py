@@ -1,0 +1,2961 @@
+{
+  "provenance": {
+    "generator": "tests/fixtures/url-parity.generate.py (case inputs + this script)",
+    "source": "craftainer_crud_sdk (Python SDK) request planner: client._Plan.*_call, query.build_query",
+    "sourceCommit": "8bd36e6e670aab10110d7cd136aee1aefa94caf1",
+    "toolchain": "craftainer-tc/template-python-package:latest, uv run python",
+    "note": "Expected values are the Python SDK's output. Do not hand-edit; regenerate."
+  },
+  "baseUrl": "https://api.test",
+  "markers": {
+    "$datetime": "ISO 8601; no offset means UTC",
+    "$date": "YYYY-MM-DD"
+  },
+  "cases": [
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {},
+      "name": "000 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 7
+      },
+      "name": "001 heroes/v1 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "create",
+      "args": {
+        "data": {
+          "name": "x"
+        }
+      },
+      "name": "002 heroes/v1 create",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        }
+      },
+      "name": "003 heroes/v1 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        },
+        "ifMatch": "W/\"1\""
+      },
+      "name": "004 heroes/v1 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "updateMany",
+      "args": {
+        "filters": {
+          "name__contains": "a"
+        },
+        "data": {
+          "name": "z"
+        }
+      },
+      "name": "005 heroes/v1 updateMany",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__contains=a"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "delete",
+      "args": {
+        "id": 7
+      },
+      "name": "006 heroes/v1 delete",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "deleteMany",
+      "args": {
+        "filters": {
+          "id__in": [1, 2, 3]
+        }
+      },
+      "name": "007 heroes/v1 deleteMany",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id__in=1,2,3"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "clone",
+      "args": {
+        "id": 7
+      },
+      "name": "008 heroes/v1 clone",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json/clone?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "filters",
+      "args": {},
+      "name": "009 heroes/v1 filters",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json/filters"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "eventsUrl",
+      "args": {},
+      "name": "010 heroes/v1 eventsUrl",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json/events"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {},
+      "name": "011 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "get",
+      "args": {
+        "id": 7
+      },
+      "name": "012 heroes/v2 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "create",
+      "args": {
+        "data": {
+          "name": "x"
+        }
+      },
+      "name": "013 heroes/v2 create",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        }
+      },
+      "name": "014 heroes/v2 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        },
+        "ifMatch": "W/\"1\""
+      },
+      "name": "015 heroes/v2 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "updateMany",
+      "args": {
+        "filters": {
+          "name__contains": "a"
+        },
+        "data": {
+          "name": "z"
+        }
+      },
+      "name": "016 heroes/v2 updateMany",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?name__contains=a"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "delete",
+      "args": {
+        "id": 7
+      },
+      "name": "017 heroes/v2 delete",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "deleteMany",
+      "args": {
+        "filters": {
+          "id__in": [1, 2, 3]
+        }
+      },
+      "name": "018 heroes/v2 deleteMany",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?id__in=1,2,3"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "clone",
+      "args": {
+        "id": 7
+      },
+      "name": "019 heroes/v2 clone",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/clone?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "filters",
+      "args": {},
+      "name": "020 heroes/v2 filters",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/filters"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "eventsUrl",
+      "args": {},
+      "name": "021 heroes/v2 eventsUrl",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/events"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {},
+      "name": "022 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 7
+      },
+      "name": "023 quests/v1 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "create",
+      "args": {
+        "data": {
+          "name": "x"
+        }
+      },
+      "name": "024 quests/v1 create",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/quests/v1/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        }
+      },
+      "name": "025 quests/v1 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "update",
+      "args": {
+        "id": 7,
+        "data": {
+          "name": "y"
+        },
+        "ifMatch": "W/\"1\""
+      },
+      "name": "026 quests/v1 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "updateMany",
+      "args": {
+        "filters": {
+          "name__contains": "a"
+        },
+        "data": {
+          "name": "z"
+        }
+      },
+      "name": "027 quests/v1 updateMany",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "delete",
+      "args": {
+        "id": 7
+      },
+      "name": "028 quests/v1 delete",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "deleteMany",
+      "args": {
+        "filters": {
+          "id__in": [1, 2, 3]
+        }
+      },
+      "name": "029 quests/v1 deleteMany",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?id__in=1,2,3"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "clone",
+      "args": {
+        "id": 7
+      },
+      "name": "030 quests/v1 clone",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/quests/v1/json/clone?id=7"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "filters",
+      "args": {},
+      "name": "031 quests/v1 filters",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json/filters"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "eventsUrl",
+      "args": {},
+      "name": "032 quests/v1 eventsUrl",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "stats",
+      "args": {},
+      "name": "033 heroes/v2 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/stats"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "stats",
+      "args": {
+        "bucket": "day"
+      },
+      "name": "034 heroes/v2 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/stats?bucket=day"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "stats",
+      "args": {
+        "bucket": "a b",
+        "includeArchived": true,
+        "includeUnpublished": false
+      },
+      "name": "035 heroes/v2 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/stats?bucket=a%20b&include_archived=true&include_unpublished=false"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {},
+      "name": "036 heroes/v2 predict",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/predict"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "field": "power_level",
+        "periods": 3,
+        "bucket": "week"
+      },
+      "name": "037 heroes/v2 predict",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/predict?field=power_level&periods=3&bucket=week"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {
+        "id": 4
+      },
+      "name": "038 heroes/v2 restore",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/restore?id=4"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {
+        "filters": {
+          "name": "x"
+        }
+      },
+      "name": "039 heroes/v2 restore",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/restore?name=x"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "createDraft",
+      "args": {
+        "data": {
+          "name": "d"
+        }
+      },
+      "name": "040 heroes/v2 createDraft",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/draft"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "publish",
+      "args": {
+        "id": 9
+      },
+      "name": "041 heroes/v2 publish",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/publish?id=9"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "revisions",
+      "args": {
+        "id": 9
+      },
+      "name": "042 heroes/v2 revisions",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/revisions?id=9"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {},
+      "name": "043 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "Ada Lovelace"
+        }
+      },
+      "name": "044 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=Ada%20Lovelace"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__eq": "x"
+        }
+      },
+      "name": "045 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=x"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "a+b&c=d/é"
+        }
+      },
+      "name": "046 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=a%2Bb%26c%3Dd%2F%C3%A9"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "!'()*"
+        }
+      },
+      "name": "047 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=%21%27%28%29%2A"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "100%"
+        }
+      },
+      "name": "048 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=100%25"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "AZaz09-._~"
+        }
+      },
+      "name": "049 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=AZaz09-._~"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "日本"
+        }
+      },
+      "name": "050 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=%E6%97%A5%E6%9C%AC"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": ""
+        }
+      },
+      "name": "051 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name="
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "a,b"
+        }
+      },
+      "name": "052 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=a%2Cb"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "line\nbreak\ttab"
+        }
+      },
+      "name": "053 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name=line%0Abreak%09tab"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__icontains": "AZaz09-._~"
+        }
+      },
+      "name": "054 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__icontains=AZaz09-._~"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__regex": "^a.*$"
+        }
+      },
+      "name": "055 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__regex=%5Ea.%2A%24"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__regex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "name": "056 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__regex=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__regex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      },
+      "name": "057 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__regex": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        }
+      },
+      "name": "058 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__regex=%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__regex": "ééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+        }
+      },
+      "name": "059 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__in": [3, 1, 2]
+        }
+      },
+      "name": "060 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?power_level__in=3,1,2"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__in": [5]
+        }
+      },
+      "name": "061 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?power_level__in=5"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__in": []
+        }
+      },
+      "name": "062 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__in": 5
+        }
+      },
+      "name": "063 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__min": -5
+        }
+      },
+      "name": "064 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?power_level__min=-5"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level": 0
+        }
+      },
+      "name": "065 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?power_level=0"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level": "5"
+        }
+      },
+      "name": "066 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level": 1.5
+        }
+      },
+      "name": "067 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level": true
+        }
+      },
+      "name": "068 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level": null
+        }
+      },
+      "name": "069 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__in": [1, "x"]
+        }
+      },
+      "name": "070 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__in": ["a", "b"]
+        }
+      },
+      "name": "071 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "nope": 1
+        }
+      },
+      "name": "072 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__nope": 1
+        }
+      },
+      "name": "073 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__min": "a"
+        }
+      },
+      "name": "074 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "id": 5
+        }
+      },
+      "name": "075 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "id__eq": 5
+        }
+      },
+      "name": "076 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "id__min": 5
+        }
+      },
+      "name": "077 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id__min=5"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "id__in": [1, 2]
+        }
+      },
+      "name": "078 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id__in=1,2"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "a",
+          "name__eq": "b"
+        }
+      },
+      "name": "079 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "__x": 1
+        }
+      },
+      "name": "080 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name__": "x"
+        }
+      },
+      "name": "081 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": 5
+        }
+      },
+      "name": "082 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": "name,-power_level"
+      },
+      "name": "083 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?sort=name,-power_level"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": ["-name", "power_level"]
+      },
+      "name": "084 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?sort=-name,power_level"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": "name,"
+      },
+      "name": "085 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": ""
+      },
+      "name": "086 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": []
+      },
+      "name": "087 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": "nope"
+      },
+      "name": "088 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": "-nope"
+      },
+      "name": "089 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "skip": 0
+      },
+      "name": "090 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?skip=0"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "skip": 20,
+        "limit": 10
+      },
+      "name": "091 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?skip=20&limit=10"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "limit": 1000
+      },
+      "name": "092 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?limit=1000"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "limit": 1001
+      },
+      "name": "093 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "limit": 0
+      },
+      "name": "094 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "skip": -1
+      },
+      "name": "095 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "limit": 1.5
+      },
+      "name": "096 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "skip": "1"
+      },
+      "name": "097 heroes/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "includeArchived": true
+      },
+      "name": "098 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?include_archived=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "includeUnpublished": false
+      },
+      "name": "099 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?include_unpublished=false"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "includeArchived": false,
+        "includeUnpublished": true
+      },
+      "name": "100 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?include_archived=false&include_unpublished=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "power_level__min": 1,
+          "name__icontains": "a",
+          "power_level__max": 9,
+          "name": "n",
+          "id__min": 2
+        },
+        "sort": "name",
+        "skip": 20,
+        "limit": 10,
+        "includeUnpublished": true,
+        "includeArchived": false
+      },
+      "name": "101 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id__min=2&name=n&name__icontains=a&power_level__max=9&power_level__min=1&sort=name&skip=20&limit=10&include_archived=false&include_unpublished=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "name": "n",
+          "name__contains": "c",
+          "name__icontains": "i",
+          "name__regex": "r"
+        }
+      },
+      "name": "102 heroes/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?name__contains=c&name=n&name__icontains=i&name__regex=r"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "is_draft": true
+        }
+      },
+      "name": "103 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?is_draft=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "is_locked": false
+        }
+      },
+      "name": "104 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?is_locked=false"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "is_draft__in": [true, false]
+        }
+      },
+      "name": "105 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?is_draft__in=true,false"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "is_draft": "true"
+        }
+      },
+      "name": "106 heroes/v2 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "is_draft": 1
+        }
+      },
+      "name": "107 heroes/v2 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at__min": {
+            "$datetime": "2026-01-02T03:04:05Z"
+          }
+        }
+      },
+      "name": "108 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at__min=2026-01-02T03%3A04%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at__min": {
+            "$datetime": "2026-01-02T03:04:05"
+          }
+        }
+      },
+      "name": "109 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at__min=2026-01-02T03%3A04%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at__max": {
+            "$datetime": "2026-01-02T03:04:05+02:00"
+          }
+        }
+      },
+      "name": "110 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at__max=2026-01-02T01%3A04%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at__max": {
+            "$datetime": "2026-01-02T03:04:05-05:30"
+          }
+        }
+      },
+      "name": "111 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at__max=2026-01-02T08%3A34%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.123456Z"
+          }
+        }
+      },
+      "name": "112 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05.123Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.678912Z"
+          }
+        }
+      },
+      "name": "113 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05.678Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.5Z"
+          }
+        }
+      },
+      "name": "114 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05.5Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.050Z"
+          }
+        }
+      },
+      "name": "115 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05.05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.000999Z"
+          }
+        }
+      },
+      "name": "116 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-02T03:04:05.000Z"
+          }
+        }
+      },
+      "name": "117 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-01-02T03%3A04%3A05Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-12-31T23:59:59.999Z"
+          }
+        }
+      },
+      "name": "118 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2026-12-31T23%3A59%3A59.999Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$datetime": "2026-01-01T00:00:00+14:00"
+          }
+        }
+      },
+      "name": "119 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at=2025-12-31T10%3A00%3A00Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at__in": [
+            {
+              "$datetime": "2026-01-01T00:00:00Z"
+            },
+            {
+              "$datetime": "2026-01-02T00:00:00"
+            }
+          ]
+        }
+      },
+      "name": "120 heroes/v2 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?created_at__in=2026-01-01T00%3A00%3A00Z,2026-01-02T00%3A00%3A00Z"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": "2026-01-02T03:04:05Z"
+        }
+      },
+      "name": "121 heroes/v2 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "list",
+      "args": {
+        "filters": {
+          "created_at": {
+            "$date": "2026-01-02"
+          }
+        }
+      },
+      "name": "122 heroes/v2 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "difficulty": "easy"
+        }
+      },
+      "name": "123 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?difficulty=easy"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "difficulty__in": ["easy", "hard"]
+        }
+      },
+      "name": "124 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?difficulty__in=easy,hard"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "difficulty": "impossible"
+        }
+      },
+      "name": "125 quests/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "difficulty__in": ["easy", "impossible"]
+        }
+      },
+      "name": "126 quests/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "due_on__min": {
+            "$date": "2026-03-04"
+          }
+        }
+      },
+      "name": "127 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?due_on__min=2026-03-04"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "due_on__in": [
+            {
+              "$date": "2026-03-04"
+            },
+            {
+              "$date": "2026-03-05"
+            }
+          ]
+        }
+      },
+      "name": "128 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?due_on__in=2026-03-04,2026-03-05"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "filters": {
+          "due_on": {
+            "$datetime": "2026-03-04T00:00:00Z"
+          }
+        }
+      },
+      "name": "129 quests/v1 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "list",
+      "args": {
+        "sort": "due_on,-title",
+        "limit": 5
+      },
+      "name": "130 quests/v1 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/quests/v1/json?sort=due_on,-title&limit=5"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price": 2
+        }
+      },
+      "name": "131 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?price=2"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price": 1.5
+        }
+      },
+      "name": "132 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?price=1.5"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price": -0.25
+        }
+      },
+      "name": "133 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?price=-0.25"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price__min": 0.1,
+          "price__max": 99.99
+        }
+      },
+      "name": "134 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?price__max=99.99&price__min=0.1"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price__in": [1, 2.5, 3]
+        }
+      },
+      "name": "135 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?price__in=1,2.5,3"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price": "1.5"
+        }
+      },
+      "name": "136 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "price": true
+        }
+      },
+      "name": "137 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "active": true,
+          "kind": "small"
+        }
+      },
+      "name": "138 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?active=true&kind=small"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "kind": "medium"
+        }
+      },
+      "name": "139 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "made_on__min": {
+            "$date": "2026-02-28"
+          },
+          "made_on__max": {
+            "$date": "2027-01-01"
+          }
+        }
+      },
+      "name": "140 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?made_on__max=2027-01-01&made_on__min=2026-02-28"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "seen_at__min": {
+            "$datetime": "2026-02-28T12:00:00.250Z"
+          }
+        }
+      },
+      "name": "141 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?seen_at__min=2026-02-28T12%3A00%3A00.25Z"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "label__in": ["a b", "c/d", "e%f"]
+        }
+      },
+      "name": "142 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?label__in=a%20b,c%2Fd,e%25f"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "label__in": ["a,b"]
+        }
+      },
+      "name": "143 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "label__in": [""]
+        }
+      },
+      "name": "144 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?label__in="
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "mystery": "anything"
+        }
+      },
+      "name": "145 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?mystery=anything"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "mystery": 5
+        }
+      },
+      "name": "146 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "filters": {
+          "secret": "x"
+        }
+      },
+      "name": "147 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?secret=x"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "sort": "secret"
+      },
+      "name": "148 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "sort": "price,-label",
+        "skip": 5,
+        "limit": 50
+      },
+      "name": "149 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?order_by=price,-label&offset=5&page_size=50"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "limit": 51
+      },
+      "name": "150 gadgets/v3 list",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "skip": 100,
+        "limit": 10,
+        "sort": "-seen_at"
+      },
+      "name": "151 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?order_by=-seen_at&offset=100&page_size=10"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "list",
+      "args": {
+        "includeArchived": true,
+        "includeUnpublished": true,
+        "limit": 1
+      },
+      "name": "152 gadgets/v3 list",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?page_size=1&include_archived=true&include_unpublished=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 0
+      },
+      "name": "153 heroes/v1 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=0"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 1
+      },
+      "name": "154 heroes/v1 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=1"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 2147483647
+      },
+      "name": "155 heroes/v1 get",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v1/json?id=2147483647"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": -1
+      },
+      "name": "156 heroes/v1 get",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": 1.5
+      },
+      "name": "157 heroes/v1 get",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": "1"
+      },
+      "name": "158 heroes/v1 get",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "get",
+      "args": {
+        "id": true
+      },
+      "name": "159 heroes/v1 get",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "restore",
+      "args": {
+        "id": 1
+      },
+      "name": "160 heroes/v1 restore",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {
+        "id": 1
+      },
+      "name": "161 heroes/v2 restore",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/restore?id=1"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "quests",
+      "apiVersion": "v1",
+      "call": "restore",
+      "args": {
+        "id": 1
+      },
+      "name": "162 quests/v1 restore",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {},
+      "name": "163 heroes/v2 restore",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {
+        "id": 1,
+        "filters": {
+          "name": "x"
+        }
+      },
+      "name": "164 heroes/v2 restore",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "restore",
+      "args": {
+        "filters": {}
+      },
+      "name": "165 heroes/v2 restore",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "updateMany",
+      "args": {
+        "filters": {},
+        "data": {}
+      },
+      "name": "166 heroes/v2 updateMany",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "deleteMany",
+      "args": {
+        "filters": {}
+      },
+      "name": "167 heroes/v2 deleteMany",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "deleteMany",
+      "args": {
+        "filters": {
+          "power_level__min": 1,
+          "name__contains": "a"
+        }
+      },
+      "name": "168 heroes/v2 deleteMany",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json?name__contains=a&power_level__min=1"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "updateMany",
+      "args": {
+        "filters": {
+          "nope": 1
+        },
+        "data": {}
+      },
+      "name": "169 heroes/v2 updateMany",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "stats",
+      "args": {},
+      "name": "170 heroes/v1 stats",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "predict",
+      "args": {},
+      "name": "171 heroes/v1 predict",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "createDraft",
+      "args": {
+        "data": {}
+      },
+      "name": "172 heroes/v1 createDraft",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "publish",
+      "args": {
+        "id": 1
+      },
+      "name": "173 heroes/v1 publish",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v1",
+      "call": "revisions",
+      "args": {
+        "id": 1
+      },
+      "name": "174 heroes/v1 revisions",
+      "expect": {
+        "error": "CapabilityError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "field": "name"
+      },
+      "name": "175 heroes/v2 predict",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "field": "nope"
+      },
+      "name": "176 heroes/v2 predict",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "periods": 0
+      },
+      "name": "177 heroes/v2 predict",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "periods": 1
+      },
+      "name": "178 heroes/v2 predict",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/predict?periods=1"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "predict",
+      "args": {
+        "field": "id",
+        "periods": 12
+      },
+      "name": "179 heroes/v2 predict",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/predict?field=id&periods=12"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "stats",
+      "args": {
+        "includeArchived": false
+      },
+      "name": "180 heroes/v2 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/stats?include_archived=false"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "stats",
+      "args": {
+        "includeUnpublished": true
+      },
+      "name": "181 heroes/v2 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/stats?include_unpublished=true"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "revisions",
+      "args": {
+        "id": -3
+      },
+      "name": "182 heroes/v2 revisions",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "publish",
+      "args": {
+        "id": "x"
+      },
+      "name": "183 heroes/v2 publish",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "admin.manifest.json",
+      "resource": "heroes",
+      "apiVersion": "v2",
+      "call": "clone",
+      "args": {
+        "id": 0
+      },
+      "name": "184 heroes/v2 clone",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/heroes/v2/json/clone?id=0"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "stats",
+      "args": {
+        "bucket": "é&"
+      },
+      "name": "185 gadgets/v3 stats",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/stats?bucket=%C3%A9%26"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "predict",
+      "args": {
+        "field": "price",
+        "periods": 2,
+        "bucket": "month"
+      },
+      "name": "186 gadgets/v3 predict",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/predict?field=price&periods=2&bucket=month"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "predict",
+      "args": {
+        "field": "label"
+      },
+      "name": "187 gadgets/v3 predict",
+      "expect": {
+        "error": "InvalidQueryError"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "eventsUrl",
+      "args": {},
+      "name": "188 gadgets/v3 eventsUrl",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/events"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "filters",
+      "args": {},
+      "name": "189 gadgets/v3 filters",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/filters"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "revisions",
+      "args": {
+        "id": 12
+      },
+      "name": "190 gadgets/v3 revisions",
+      "expect": {
+        "method": "GET",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/revisions?id=12"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "restore",
+      "args": {
+        "filters": {
+          "active": false
+        }
+      },
+      "name": "191 gadgets/v3 restore",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/restore?active=false"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "publish",
+      "args": {
+        "id": 3
+      },
+      "name": "192 gadgets/v3 publish",
+      "expect": {
+        "method": "POST",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json/publish?id=3"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "update",
+      "args": {
+        "id": 5,
+        "data": {}
+      },
+      "name": "193 gadgets/v3 update",
+      "expect": {
+        "method": "PATCH",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?id=5"
+      }
+    },
+    {
+      "manifest": "url-parity.manifest.json",
+      "resource": "gadgets",
+      "apiVersion": "v3",
+      "call": "delete",
+      "args": {
+        "id": 5
+      },
+      "name": "194 gadgets/v3 delete",
+      "expect": {
+        "method": "DELETE",
+        "url": "https://api.test/api/crud/v1/gadgets/v3/json?id=5"
+      }
+    }
+  ]
+}
