@@ -157,7 +157,7 @@ already establishes for `ruff`/`mypy`/`pytest`/`pip-audit`.
   ```toml
   [[IgnoredVulns]]
   id = "GHSA-xxxx-xxxx-xxxx"
-  effectiveUntil = 2027-01-31
+  ignoreUntil = 2027-01-31
   reason = "Not reachable: we never call the affected parser"
   ```
 
