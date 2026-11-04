@@ -103,12 +103,19 @@ instance's own toolchain needs.
 `.pre-commit-config.yaml` defines whitespace/EOF fixers, YAML/TOML/JSON
 checks, `conventional-pre-commit` (Conventional Commits, enforced at the
 `commit-msg` stage), the `template-sync-manifest` completeness check, and
-the `devcontainer-lock` lockfile-consistency check, and three security
-scanners (below). An instance layers
+the `devcontainer-lock` lockfile-consistency check, `ruff-check`/`ruff-format`
+(`astral-sh/ruff-pre-commit`, scoped to `.github/scripts/*.py` so base can't
+ship scripts that fail a Python instance's own ruff hook; keep its `rev` equal
+to the ruff the Python templates pin), and three security scanners (below). An instance layers
 its own language-specific hooks on top (lint,
 format, type check, test suite, dependency-vulnerability scan, ...),
 matching the shape `template-fastapi`'s own `.pre-commit-config.yaml`
 already establishes for `ruff`/`mypy`/`pytest`/`pip-audit`.
+
+`check-merge-conflict` runs with `--assume-in-merge`, so it flags committed
+conflict markers (a line starting `<<<<<<< `, `=======` or `>>>>>>> `) in any
+file, not just during an in-progress git merge; a template sync PR that
+commits a merge-tier conflict is then caught in CI.
 
 ### Security scanners
 
@@ -167,6 +174,117 @@ already establishes for `ruff`/`mypy`/`pytest`/`pip-audit`.
   triggers with a label trigger and in-workflow jobs). Don't suppress an
   audit to get green.
 
+### Supply chain and release hardening
+
+Findings from the OWASP review (A03/A08), and what each now does:
+
+- **Release runs only from the default branch.** `release.yml`'s first
+  step fails unless `github.ref` is `refs/heads/<default branch>`, and
+  `build`, `release` and `publish-packages` (the jobs holding `contents:
+  write`, `packages: write`, the OIDC token or registry secrets) repeat
+  the check as a job-level `if:`. This stops an accidental dispatch from another branch, but
+  it is not a security boundary: GitHub runs the workflow file from the
+  dispatched ref, so a writer can delete the checks on their own branch.
+  The server-side rule is the `release` environment (next bullet).
+  The tag and release target `github.sha`, which for a dispatch on the
+  default branch is its tip. Instances get this through template sync.
+  GitHub's [events documentation](https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows)
+  defines `GITHUB_REF` for a dispatch as the "branch or tag that received
+  dispatch", so the check has to be explicit; the
+  [secure-use guide](https://docs.github.com/en/actions/reference/security/secure-use)
+  asks for the least privilege `GITHUB_TOKEN` and warns that anyone with
+  write access can read repository secrets.
+- **Release environment (setup step for each instance).** `release.yml`'s
+  `build`, `release` and `publish-packages` jobs declare `environment:
+  release`. An admin must configure it once per repository, **before the
+  first release that carries this workflow**: GitHub creates a
+  referenced-but-missing environment with no rules and no secrets, so an
+  unconfigured one protects nothing. Settings → Environments → `release`:
+  Deployment branches and tags → *Selected branches and tags* → add the
+  default branch (e.g. `main`) as a branch rule; or with the API,
+  `PUT repos/<owner>/<repo>/environments/release` with
+  `deployment_branch_policy: {protected_branches: false,
+  custom_branch_policies: true}`, then `POST
+  .../environments/release/deployment-branch-policies` with `name=<default
+  branch>` and `type=branch`. Then move the release secrets
+  (`OCI_REGISTRY_USERNAME`, `OCI_REGISTRY_PASSWORD`, `NPM_TOKEN`,
+  `CARGO_REGISTRY_TOKEN`) from repository secrets into the environment
+  (`gh secret set NAME --env release`, then `gh secret delete NAME`). An
+  *organization* secret of the same name stays readable by any workflow
+  in a repository it is shared with: delete it and recreate it as an
+  environment secret instead. A run
+  from any other ref is then refused the privileged jobs and cannot read
+  them, even if the in-workflow default-branch check was deleted on that
+  branch. The `jobs.<id>.environment` secrets are read as `secrets.NAME`
+  exactly like repository secrets, so no step changes (an environment
+  secret overrides a repository one of the same name); repository
+  *variables* (`PYPI_PUBLISH`, `OCI_REGISTRY`, ...) stay as they are.
+  `release-check`, `verify-published` and `version` hold no write
+  permission or secret and do not use the environment. Syncing the
+  workflow into an instance does not create or configure the environment;
+  until the steps above are done, nothing fails and nothing is protected.
+  The `build` job is a matrix, so each arch leg, `release` and
+  `publish-packages` is its own deployment: use the branch rule only.
+  Required reviewers or a wait timer would ask for approval once per job
+  and leg. If the repository
+  is private it needs a plan that supports environments. Trusted
+  publishers (npm, PyPI, crates.io) have an optional *environment* field,
+  and it must be set to `release`: that field is what binds publishing to
+  the environment, and without it a branch workflow with `id-token: write`
+  can still publish by OIDC. Set it once `release.yml` with the
+  environment is on the default branch. The registries only report a bad
+  config when you publish. Residual: a writer's branch workflow can
+  request `packages: write` itself, so the environment does not gate GHCR
+  pushes; mitigate with the package's GHCR Actions-access setting, pinning
+  consumed images and features by digest, and an org ruleset requiring
+  review for `.github/workflows/**`. See the [GitHub documentation](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/manage-environments)
+  and [npm's](https://docs.npmjs.com/trusted-publishers).
+- **Renovate waits 3 days before automerging.** The "patch and minor
+  updates" group sets `minimumReleaseAge: "3 days"` (the age Renovate's
+  own `security:minimumReleaseAgeNpm` preset uses) with
+  a top-level `internalChecksFilter: "strict"` (the
+  [documented recommendation](https://docs.renovatebot.com/key-concepts/minimum-release-age/)
+  alongside it), so a version still inside the window is skipped, not
+  merged. Which updates automerge is unchanged, except one: Renovate 42
+  holds an update without a release timestamp forever
+  (`minimumReleaseAgeBehaviour` defaults to `timestamp-required`), and the
+  `python-version` and `github-runners` datasources have none, so Python
+  patches and runner image bumps are raised as their own PRs, without the
+  age check, and are not automerged.
+  Digest-only updates (including the Dockerfile's base image) were never
+  in the automerged group.
+- **Installers are verified, not run blind.** `scripts/develop.sh` no
+  longer runs vendor install scripts. `uv` and `prek` are installed from
+  their release tarballs, checked against the `.sha256` file published
+  beside each asset; Claude Code's binary is checked against its
+  `manifest.json`, whose GPG signature is verified against the pinned
+  release-signing-key fingerprint (the vendor's
+  [documented verification](https://code.claude.com/docs/en/setup)). The
+  versions stay in the Dockerfile ARGs, so Renovate needs no new
+  manager. A checksum fetched from the same release as the file it
+  covers guards against a corrupted or swapped download, and against a
+  mirror or CDN serving something else; it does not help if the vendor's
+  release itself is compromised (the signed Claude Code manifest does
+  cover that). That is the same assurance node, `snip` and `gh` already
+  had. Bumping the signing key is a manual edit of `claude_signing_fpr`
+  when Anthropic rotates it.
+- **The devcontainer base image and Dockerfile frontend are pinned by
+  digest.** `.devcontainer/Dockerfile` has `FROM
+  mcr.microsoft.com/devcontainers/base:trixie@sha256:...` and a pinned
+  `# syntax=` line, both written literally (the former `DEBIAN_VERSION`
+  ARG is gone), so Renovate's `dockerfile` manager can keep tag and digest
+  together. To move to another Debian release, change the tag; Renovate
+  re-pins the digest.
+- **Accepted (Low): the MCP server's transitive dependencies.**
+  `.mcp.json` pins `@waldzellai/clear-thought-onepointfive` to an exact
+  version, but `npx` has no lockfile support, the package ships no
+  `npm-shrinkwrap.json`, and its own dependencies are ranges (`zod`,
+  `marked`, `@modelcontextprotocol/sdk`, ...). Those resolve at each
+  session start in the credentialed devcontainer. Mitigations are the
+  exact top-level pin, Renovate bumping it, and the 3-day age gate on
+  that bump; the transitive set is not pinned. An instance that wants it
+  pinned vendors the server (a lockfile and `npm ci`) instead.
+
 Run everything at once with:
 
 ```bash
@@ -193,10 +311,10 @@ unchanged across every instance), then drives these targets:
 | Target | Runs | Where | Env available |
 |---|---|---|---|
 | `release-arches` | once, first | host runner | none; must print a JSON array on stdout, e.g. `["amd64"]` |
-| `build`, `sbom`, `release-assets`, `publish` | once **per arch**, in that order | host runner for that arch | `RELEASE_VERSION`, `RELEASE_TAG`, `RELEASE_ARCH`, `OCI_REGISTRY`, `OCI_IMAGE_NAME`, `OCI_REGISTRY_USERNAME`, `OCI_REGISTRY_PASSWORD`, all `GITHUB_*` (`GITHUB_TOKEN` has `packages: write`); no package-registry variables or secrets, and no OIDC token |
+| `build`, `sbom`, `release-assets`, `publish` | once **per arch**, in that order | host runner for that arch | `RELEASE_VERSION`, `RELEASE_TAG`, `RELEASE_ARCH`, `OCI_REGISTRY`, `OCI_IMAGE_NAME`, `OCI_REGISTRY_USERNAME`, `OCI_REGISTRY_PASSWORD`, all `GITHUB_*` (`GITHUB_TOKEN` has `packages: write`); the registry credentials come from the `release` environment; no package-registry variables or secrets, and no OIDC token |
 | `release-check` | once, after all arches; gates the GitHub release and `publish-packages` (not the per-arch image `publish`, which already ran in `build`) | **inside the devcontainer** (`devcontainers/ci`), stack up | `RELEASE_VERSION`, `RELEASE_TAG`, `GITHUB_REPOSITORY`; **not** `RELEASE_ARCH` (it runs once, not per arch) and no `ARCHES`: to check each arch's files in `dist/`, iterate over `make -s release-arches` |
 | `finalize` | once, after `release-check`; then the GitHub release is created | host runner | same as per-arch minus `RELEASE_ARCH` (`GITHUB_TOKEN` also has `packages: write`) |
-| `publish-packages` | once, after the GitHub release exists, **only if** `PYPI_PUBLISH`, `NPM_PUBLISH` or `CARGO_PUBLISH` is set | host runner (own job, with `id-token: write`) | `RELEASE_VERSION`, `RELEASE_TAG`, `PYPI_PUBLISH`, `NPM_PUBLISH`, `CARGO_PUBLISH`, all `GITHUB_*`, the OIDC token, `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN` (bootstrap secrets; empty when unset, so treat empty as absent); `dist/` holds every arch leg's files |
+| `publish-packages` | once, after the GitHub release exists, **only if** `PYPI_PUBLISH`, `NPM_PUBLISH` or `CARGO_PUBLISH` is set | host runner (own job, with `id-token: write`, in the `release` environment) | `RELEASE_VERSION`, `RELEASE_TAG`, `PYPI_PUBLISH`, `NPM_PUBLISH`, `CARGO_PUBLISH`, all `GITHUB_*`, the OIDC token, `NPM_TOKEN` and `CARGO_REGISTRY_TOKEN` (bootstrap secrets; empty when unset, so treat empty as absent); `dist/` holds every arch leg's files |
 | `verify-published` | once, after `publish-packages` succeeded, **only if** a `*_PUBLISH` variable is set | host runner (own job, no secrets, no OIDC token) | `RELEASE_VERSION`, `RELEASE_TAG`, `PYPI_PUBLISH`, `NPM_PUBLISH`, `CARGO_PUBLISH`; `dist/` as for `publish-packages` |
 
 What each target is for: `build` produces the release artifact(s) (an
@@ -429,6 +547,20 @@ Further sync behaviour, detailed in `.github/scripts/README.md`:
 - The moderation `apply` jobs download the `moderation-result` artifact
   strictly, so a lost artifact fails the job instead of passing silently
   (see `.github/workflows/README.md`, "Issue moderation").
+- The issue-moderation workflows (`moderate-*.yml`) keep Claude read-only
+  and do every write in a separate `apply` job, now for triage as well as
+  fix/build (see `docs/adrs/0001-harden-the-issue-moderation-workflows.md`
+  in template-base and `.github/workflows/README.md`). What an instance
+  sees: `ANTHROPIC_API_KEY` is passed through the process environment only,
+  never `.secrets/claude.txt`; Claude's git and `gh` tools are narrowed, and
+  `MODERATION_EXTRA_TOOLS` is the way to add more; a fix or plan that
+  changes CI, devcontainer, hook, `Makefile`/`*.mk`, `Dockerfile*`,
+  `compose*.y*ml` or release files ends as a `needs-human` note instead of a
+  PR; and the PR base is the default branch. Claude's commands run in Claude
+  Code's sandbox (the image installs `bubblewrap` and `socat`) with a network
+  allow-list; `MODERATION_EXTRA_DOMAINS` adds hosts (e.g. a package
+  registry), and the pipeline fails closed if the sandbox cannot start. An instance whose Makefile or
+  hook configuration the agent needs to change does that by hand.
 - The scripts under `.github/scripts/` run on the runner's system `python3`.
   Base ships `.github/scripts/ruff.toml` (`replace` tier), pinned to that
   Python's `target-version`, and `test_script_syntax.py` guards it with
@@ -495,6 +627,10 @@ the place for their own runtime (FastAPI, axum, React) and their own ADRs.
 A mid-layer classifies its own tree for its instances in its own
 `.github/template-sync-manifest.yml`, which is `merge` tier in every
 instance: base's additions are resolved by hand there.
+In `template-python-package`, `README.md` is `ignore` tier: each package's
+README is entirely its own, so a merge conflicted on every sync. The
+instance owns it from creation, and later changes to the template's
+README no longer reach instances by sync.
 An instance lists extra paths of its own under `ignore:` in
 `.github/template-sync-manifest.local.yml`. Which template an instance
 follows is recorded in its `.github/template-sync-state.json`

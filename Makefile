@@ -16,8 +16,11 @@ ARCHES := amd64
 NAME := $(shell python3 -c 'import tomllib; print(tomllib.load(open("pyproject.toml", "rb"))["project"]["name"])')
 ASSET := dist/$(NAME)-$(RELEASE_VERSION)
 
-# renovate: datasource=docker depName=anchore/syft
-SYFT_VERSION := v1.52.0
+# Pinned by tag and digest; Renovate updates both together (the
+# SYFT_IMAGE/UV_IMAGE manager in .github/renovate.json). It runs as root on
+# dist/ between `build` and the upload, so a retagged image must not be able
+# to rewrite the wheel and sdist.
+SYFT_IMAGE := anchore/syft:v1.52.0@sha256:500e2d872ac019436926e8322b4fc1f39441d94d21f6f4046c6ff29b30e8cb02
 
 # release.yml runs build/sbom/publish-packages on the bare runner, which has docker but
 # no uv; release-check runs in the devcontainer, which has uv. So use the
@@ -25,11 +28,18 @@ SYFT_VERSION := v1.52.0
 # minor as .devcontainer/Dockerfile; tests/unit/test_release_contract.py
 # fails if the uv version drifts from it). The OIDC variables are forwarded so
 # `uv publish --trusted-publishing always` works inside the container.
+# UV_IMAGE is pinned by tag and digest (a retagged image would receive the OIDC
+# request token); Renovate updates both. UV_VERSION and PYTHON_VERSION above
+# stay the source the devcontainer test compares, and the guard below fails the
+# Makefile if the image tag drifts from them.
 # renovate: datasource=github-releases depName=astral-sh/uv
-UV_VERSION := 0.13.5
+UV_VERSION := 0.13.6
 # renovate: datasource=python-version depName=python versioning=docker
 PYTHON_VERSION := 3.14
-UV_IMAGE := ghcr.io/astral-sh/uv:$(UV_VERSION)-python$(PYTHON_VERSION)-trixie-slim
+UV_IMAGE := ghcr.io/astral-sh/uv:0.13.6-python3.14-trixie-slim@sha256:637619278855a77885a94312efa7decd8479ca6cec5f959e134cbab96582821e
+ifeq ($(findstring :$(UV_VERSION)-python$(PYTHON_VERSION)-,$(UV_IMAGE)),)
+$(error UV_IMAGE ($(UV_IMAGE)) does not match UV_VERSION $(UV_VERSION) and PYTHON_VERSION $(PYTHON_VERSION); update the three together)
+endif
 UV := $(shell command -v uv >/dev/null 2>&1 && echo uv || echo \
 	docker run --rm -u $$(id -u):$$(id -g) -v "$(CURDIR):/src" -w /src \
 	-e UV_CACHE_DIR=/tmp/uv-cache -e UV_PYTHON_DOWNLOADS=never \
@@ -56,7 +66,7 @@ build:
 
 sbom:
 	@set -e; whl=$$(ls dist/*.whl); \
-	docker run --rm -v "$(CURDIR)/dist:/dist" anchore/syft:$(SYFT_VERSION) \
+	docker run --rm -v "$(CURDIR)/dist:/dist" $(SYFT_IMAGE) \
 		"file:/$$whl" -o "spdx-json=/$${whl%.whl}.spdx.json"
 
 release-assets:
