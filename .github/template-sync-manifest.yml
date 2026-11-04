@@ -108,6 +108,11 @@ ignore:
   # Each instance chooses its own license and copyright holder.
   - LICENSE
 
+  # Each package's README is entirely its own (name, usage, API); a merge
+  # against this template's README conflicted on every sync, so it is
+  # instance-owned from creation, like pyproject.toml.
+  - README.md
+
   # The package scaffold: an instance renames the distribution and the import
   # package (see README.md), owns its dependencies, code, tests, benchmarks
   # and import-linter contract, so none of it can be synced.
@@ -146,9 +151,6 @@ ignore:
   - .github/template-sync-manifest.local.yml
 
 merge:
-  # Project identity (name/description) is interpolated per instance.
-  - README.md
-
   # Files with no include mechanism of their own (JSON configs, prek's
   # .pre-commit-config.yaml), and docs an instance appends to: a three-way
   # merge keeps the instance's additions.
