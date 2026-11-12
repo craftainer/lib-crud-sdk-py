@@ -187,6 +187,7 @@ def _version_order(api_version: str) -> tuple[int, str]:
 
 _NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
 _PATH = re.compile(r"/[A-Za-z0-9\-._~!$&'()*+,;=:@%/]*")
+_SCHEME = re.compile(r"[A-Za-z][A-Za-z0-9+.-]*://")
 _HOST = re.compile(r"[A-Za-z0-9._:-]+")
 _BAD_ENCODED = re.compile(r"%(?:2e|2f|5c|00)", re.IGNORECASE)
 MAX_PATH_CHARS = 1024
@@ -210,7 +211,7 @@ def _path(value: str, where: str, *, allow_url: bool = False) -> str:
     ``#`` (the client appends the query itself, a fragment is never sent), no backslash, no
     dot-segment and no percent-encoded ``.``, ``/``, ``\\`` or NUL.
     """
-    if allow_url and "://" in value:
+    if allow_url and _SCHEME.match(value) is not None:
         return _url(value, where)
     if (
         len(value) > MAX_PATH_CHARS

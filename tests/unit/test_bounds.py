@@ -389,3 +389,10 @@ async def test_a_bare_async_hooked_transport_without_bounds_is_unbounded() -> No
     transport = AsyncHookedTransport(big, [], trusted_origins=None, bounds=None)
     async with httpx2.AsyncClient(transport=transport) as client:
         assert len((await client.get(f"{BASE}/x")).content) == 100
+
+
+def test_a_hook_sees_the_request_on_a_bounded_response() -> None:
+    """The bounded copy keeps `request`, which hooks read before the client sets it."""
+    request = httpx2.Request("GET", BASE)
+    response = bound(request, httpx2.Response(200, stream=_Chunks([b"{}"])), Bounds(), None)
+    assert response.request is request

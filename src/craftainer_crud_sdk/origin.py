@@ -22,16 +22,12 @@ type Origin = tuple[str, str, int]
 """An origin as ``(scheme, host, port)``, the default port filled in (RFC 6454)."""
 
 
-def _origin(url: str | httpx2.URL) -> Origin:
+def origin_of(url: str | httpx2.URL) -> Origin:
+    """The origin of an http(s) URL; `ValueError` (or `httpx2.InvalidURL`) if it has none."""
     parsed = httpx2.URL(url) if isinstance(url, str) else url
     if parsed.scheme not in _DEFAULT_PORTS or not parsed.host:
         raise ValueError(f"{str(url)!r} is not an http(s) URL with a host")
     return parsed.scheme, parsed.host, parsed.port or _DEFAULT_PORTS[parsed.scheme]
-
-
-def origin_of(url: str | httpx2.URL) -> Origin:
-    """The origin of an http(s) URL; `ValueError` (or `httpx2.InvalidURL`) if it has none."""
-    return _origin(url)
 
 
 def trusted_origins(
@@ -42,7 +38,7 @@ def trusted_origins(
     Raises `ValueError` when `base_url` is not an http(s) URL with a host.
     """
     try:
-        return frozenset({_origin(base_url), *(_origin(a) for a in allowed_origins or ())})
+        return frozenset({origin_of(base_url), *(origin_of(a) for a in allowed_origins or ())})
     except httpx2.InvalidURL as exc:
         raise ValueError(f"{base_url!r} is not a valid URL: {exc}") from exc
 
@@ -52,7 +48,7 @@ def check_origins(origins: Sequence[str] | None) -> tuple[str, ...]:
     checked = tuple(origins or ())
     for origin in checked:
         try:
-            _origin(origin)
+            origin_of(origin)
         except (httpx2.InvalidURL, ValueError) as exc:
             raise ValueError(f"allowed_origins entry {origin!r} is not an origin: {exc}") from exc
     return checked
@@ -67,8 +63,8 @@ def join_same_origin(base: str, ref: str, allowed_origins: Sequence[str] | None 
     """
     try:
         joined = urljoin(base, ref)
-        origin = _origin(joined)
-        trusted = {_origin(base), *(_origin(a) for a in allowed_origins or ())}
+        origin = origin_of(joined)
+        trusted = {origin_of(base), *(origin_of(a) for a in allowed_origins or ())}
     except (httpx2.InvalidURL, ValueError) as exc:
         raise ManifestError(f"{ref!r} is not a valid URL to join onto {base!r}: {exc}") from exc
     if origin not in trusted:

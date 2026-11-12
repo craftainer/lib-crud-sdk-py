@@ -94,15 +94,18 @@ def _declared(request: httpx2.Request, response: httpx2.Response, bounds: Bounds
 
 
 def _copy(
-    response: httpx2.Response, stream: httpx2.SyncByteStream | httpx2.AsyncByteStream
+    request: httpx2.Request,
+    response: httpx2.Response,
+    stream: httpx2.SyncByteStream | httpx2.AsyncByteStream,
 ) -> httpx2.Response:
     headers = [
         (k, v) for k, v in response.headers.multi_items() if k.lower() not in FRAMING_HEADERS
     ]
-    # The client sets `request` on whatever the transport returns, so it is not copied.
-    return httpx2.Response(
+    copy = httpx2.Response(
         response.status_code, headers=headers, stream=stream, extensions=response.extensions
     )
+    copy.request = request  # hooks run before the client sets it
+    return copy
 
 
 class _Counter:
@@ -183,7 +186,7 @@ def bound(
         try:
             counter.count(response.content)
         except httpx2.ResponseNotRead:
-            return _copy(response, _SyncBounded(response, counter))
+            return _copy(request, response, _SyncBounded(response, counter))
     except BaseException:
         response.close()
         raise
@@ -203,7 +206,7 @@ async def abound(
         try:
             counter.count(response.content)
         except httpx2.ResponseNotRead:
-            return _copy(response, _AsyncBounded(response, counter))
+            return _copy(request, response, _AsyncBounded(response, counter))
     except BaseException:
         await response.aclose()
         raise

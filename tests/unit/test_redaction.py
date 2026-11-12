@@ -103,6 +103,9 @@ def test_log_key_drops_scope_and_query() -> None:
     assert "a" * 32 not in shown
     assert "ssn" not in shown
     assert log_key(key) == shown
+    manifest = log_key("v1/_manifest/" + "b" * 32)
+    assert manifest.startswith("v1/_manifest/#")
+    assert "b" * 32 not in manifest
     assert log_key(key + "x") != shown
 
 

@@ -96,7 +96,8 @@ layer, whose `clear`, `cached_etag` and `events_active` stay available.
   body byte; `DeadlineExceededError`) and `max_response_bytes` (default 16 MiB of *decoded* body,
   so a compression bomb counts at its inflated size; `ResponseTooLargeError`). Pass `None` to
   switch either off. Event streams are exempt when the request asks for `text/event-stream` and the response is one
-  (httpx2 bounds each SSE event itself); `HEAD`, `204` and `304` responses may declare any
+  (httpx2 bounds each SSE event itself; the wait for their headers is governed by the stream's own
+  timeouts); `HEAD`, `204` and `304` responses may declare any
   `Content-Length`. The deadline is per transport attempt: the refresh-and-retry after a `401` gets
   its own. The async
   client also cuts the wait for response headers at the deadline; the sync client cannot

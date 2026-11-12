@@ -73,7 +73,8 @@ def log_key(key: str) -> str:
     The scope (a token hash) and the canonical query (filter values, often personal data) are
     left out; the digest still lets one line be matched with another.
     """
-    head = "/".join(key.split("/")[:3])
+    parts = key.split("/")
+    head = "/".join(parts[:2] if parts[1:2] == ["_manifest"] else parts[:3])  # scope follows
     return f"{head}/#{hashlib.sha256(key.encode()).hexdigest()[:12]}"
 
 

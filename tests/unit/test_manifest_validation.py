@@ -127,3 +127,8 @@ def test_the_parsed_manifest_carries_the_clamped_keepalive() -> None:
         events = parse_manifest(doc).resources[0].capabilities.events
         assert events is not None
         assert events.keepalive_seconds == expected
+
+
+def test_a_scheme_like_text_inside_a_path_segment_is_a_path_not_a_url() -> None:
+    """`/proxy/https://x/records` is judged as a path (and passes the path rules)."""
+    assert parse_manifest(_doc(base_path="/proxy/https://x/records")).resources

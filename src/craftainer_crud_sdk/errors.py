@@ -87,7 +87,8 @@ def redact_response(response: httpx2.Response) -> httpx2.Response:
     """A copy of `response` that is safe to keep on an exception.
 
     The original keeps `request.headers` (so the ``Authorization`` token) and the request URL's
-    query; an error reporter that serialises exception attributes or frames would ship them. The
+    query; an error reporter that serialises exception attributes would ship them. (Frame locals
+    of the SDK's own frames are outside what this can protect; `elapsed` is not copied.) The
     copy keeps the status, the (redacted) headers, the body and the request method and URL
     without userinfo, query or fragment; the request headers are redacted and its body dropped.
     """
