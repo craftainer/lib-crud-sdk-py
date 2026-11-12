@@ -13,16 +13,38 @@ import httpx2
 
 from craftainer_crud_sdk.errors import ManifestError
 
-__all__ = ["check_origins", "join_same_origin"]
+__all__ = ["Origin", "check_origins", "join_same_origin", "origin_of", "trusted_origins"]
 
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
 
-def _origin(url: str) -> tuple[str, str, int | None]:
-    parsed = httpx2.URL(url)
+type Origin = tuple[str, str, int]
+"""An origin as ``(scheme, host, port)``, the default port filled in (RFC 6454)."""
+
+
+def _origin(url: str | httpx2.URL) -> Origin:
+    parsed = httpx2.URL(url) if isinstance(url, str) else url
     if parsed.scheme not in _DEFAULT_PORTS or not parsed.host:
-        raise ValueError(f"{url!r} is not an http(s) URL with a host")
+        raise ValueError(f"{str(url)!r} is not an http(s) URL with a host")
     return parsed.scheme, parsed.host, parsed.port or _DEFAULT_PORTS[parsed.scheme]
+
+
+def origin_of(url: str | httpx2.URL) -> Origin:
+    """The origin of an http(s) URL; `ValueError` (or `httpx2.InvalidURL`) if it has none."""
+    return _origin(url)
+
+
+def trusted_origins(
+    base_url: str, allowed_origins: Sequence[str] | None = None
+) -> frozenset[Origin]:
+    """The origins a credential may be sent to: `base_url`'s plus `allowed_origins`.
+
+    Raises `ValueError` when `base_url` is not an http(s) URL with a host.
+    """
+    try:
+        return frozenset({_origin(base_url), *(_origin(a) for a in allowed_origins or ())})
+    except httpx2.InvalidURL as exc:
+        raise ValueError(f"{base_url!r} is not a valid URL: {exc}") from exc
 
 
 def check_origins(origins: Sequence[str] | None) -> tuple[str, ...]:

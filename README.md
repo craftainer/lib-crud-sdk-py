@@ -71,7 +71,41 @@ layer, whose `clear`, `cached_etag` and `events_active` stay available.
   bearer token to another host. For a split-origin deployment, opt in per origin:
   `CrudClient(base_url, allowed_origins=["https://events.example.com"])` (also
   `AsyncCrudClient`; exposed as `client.allowed_origins`). The explicit `manifest_url` you pass
-  yourself is trusted as given.
+  yourself is exempt from this join check, but not from the credential guard below.
+- **Credentials go only to trusted origins.** A request that carries an `Authorization` header
+  (the provider's token or a header configured on the client) is refused with
+  `OriginNotAllowedError` (a `ClientError`, raised before anything is sent) unless its origin is
+  `base_url`'s or one of `allowed_origins`, as browsers withhold credentials from other origins.
+  The comparison is exact on scheme, host and port (default ports filled in, so `:443` equals
+  `https`). It runs on the request as sent, so it also covers `client.http.get(url)`, a hook that
+  rewrote the URL and an explicit `manifest_url` on another origin (add that origin to
+  `allowed_origins`). Anonymous requests are never refused. See ADR 0005.
+- **Manifest shape.** `name` must be 1-64 characters of `A-Za-z0-9_-` starting with a letter or
+  digit (it is part of every cache key). `base_path` and every `paths` value must be an absolute
+  path of at most 1024 characters: a single leading `/`, RFC 3986 path characters only, no `?`,
+  `#`, backslash, dot-segment (`.`/`..`) or percent-encoded `.`, `/`, `\` or NUL. An absolute
+  `http(s)` URL (no userinfo, query or fragment, same path rules) is still accepted, for split
+  origins, and is checked against the origins at join time. Anything else raises `ManifestError`
+  when the manifest loads, so nothing is sent from it.
+- **Bounds.** Besides httpx's per-phase `timeout` (default 5 s; its read timeout restarts at every
+  chunk), every response is bounded by `total_timeout` (default 30 s, from sending to the last
+  body byte; `DeadlineExceededError`) and `max_response_bytes` (default 16 MiB of *decoded* body,
+  so a compression bomb counts at its inflated size; `ResponseTooLargeError`). Pass `None` to
+  switch either off. Event streams are exempt (httpx2 bounds each SSE event itself). The async
+  client also cuts the wait for response headers at the deadline; the sync client cannot
+  interrupt a blocked read, so it can overrun by up to one `timeout` phase.
+  `iter_all(..., max_pages=1000)` raises `PaginationLimitExceededError` instead of looping when
+  1000 full pages did not reach the end, or when a page holds more rows than `limit`.
+  Event-stream `keepalive_seconds` from the manifest is clamped to 1-60 s (15 s when missing,
+  non-numeric, non-finite or not positive); the dead-stream timeout is three intervals.
+- **Errors and logs.** `ProblemError.response` and `ResponseError.response` are redacted copies:
+  the status, body and headers are kept, but `Authorization`, `Cookie`, `Set-Cookie` and any
+  header whose name contains token, secret, api key, csrf/xsrf, session or credential are
+  `[redacted]` (also in `ProblemError.headers`), and the request URL has no userinfo, query or
+  fragment and the request no body. Server-supplied title, detail and field messages are cut to
+  300 characters in the exception message (the full `detail` stays on `.detail`), and a
+  redirect `Location` is shown without its query. Cache keys are logged as `v1/<resource>/<kind>/#<digest>`
+  (never the scope or the filter values).
 - **Plain http.** A request that carries an `Authorization` header is refused with
   `InsecureTransportError` (a `ClientError`, raised before anything is sent) when its URL is
   `http:` and the host is not loopback (`localhost`, `*.localhost`, `127.0.0.0/8`, `::1`, judged
@@ -130,6 +164,13 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
   cache miss and a logged warning. Cache keys carry no server identity: a store shared
   between servers or environments must use a per-origin namespace (for `RedisStore`, its
   `namespace` argument, which must not be empty).
+- **Redis trust boundary.** Redis entries are plain JSON with no encryption and no integrity tag
+  (no HMAC). Whoever can read the instance reads every caller's cached responses (keys carry
+  only a hash of the token); whoever can write to it can plant a response, and an ETag later sent
+  as `If-Match`, that the client returns as if the server sent it. Keep Redis inside the
+  application's trust boundary: private network, authentication and TLS configured on the
+  `redis.Redis` client you pass in, ACLs limited to this application, one namespace per server.
+  If the instance is shared with less-trusted parties, use `MemoryStore`.
 - `Set-Cookie` is never stored or replayed.
 - A cache clear that fails (a Redis error: `RedisStore.clear` / `clear_many` return `False`, and
   log the warning) marks the affected resource not fresh: no fresh hit, no stale-while-revalidate
@@ -145,6 +186,21 @@ layer = CacheLayer(MemoryStore(max_entries=1024), {"heroes": CachePolicy.from_ma
 
 The design and its reasons are in
 [`docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md`](docs/adrs/0002-own-thin-cache-layer-with-sse-invalidation.md).
+
+## Upgrading to 0.4 (breaking)
+
+These calls, accepted before, now fail. Each is a deliberate fail-closed change (ADR 0005).
+
+| If you... | Now | Do |
+| --- | --- | --- |
+| send a token to an origin other than `base_url` (an explicit `manifest_url`, `client.http.get(other_url)`, a hook rewriting URLs) | `OriginNotAllowedError` | add the origin to `allowed_origins` |
+| serve a manifest with a `name`, `base_path` or `paths` value outside the shapes above (`?`, `#`, `..`, `//host/...`, relative path, odd characters in a name) | `ManifestError` when the manifest loads | fix the server manifest |
+| read responses larger than 16 MiB or slower than 30 s in total | `ResponseTooLargeError` / `DeadlineExceededError` | pass `max_response_bytes=` / `total_timeout=` (or `None`) |
+| `iter_all` over more than 1000 full pages, or a server that returns more rows than `limit` | `PaginationLimitExceededError` | pass a larger `max_pages=` / fix the server |
+| rely on `error.response.request.headers["Authorization"]` or the request URL's query | the value is `[redacted]` or gone | read your own request instead |
+| match cache keys in log output | the log shows a digest | derive the key yourself with `build_key` |
+
+Also changed, without a failure: `keepalive_seconds` outside 1-60 s is clamped.
 
 ## Publishing to PyPI
 

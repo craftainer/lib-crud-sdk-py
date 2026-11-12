@@ -184,6 +184,72 @@ def _version_order(api_version: str) -> tuple[int, str]:
     return len(digits), digits
 
 
+_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+_PATH = re.compile(r"/[A-Za-z0-9\-._~!$&'()*+,;=:@%/]*")
+_HOST = re.compile(r"[A-Za-z0-9._:-]+")
+_BAD_ENCODED = re.compile(r"%(?:2e|2f|5c|00)", re.IGNORECASE)
+MAX_PATH_CHARS = 1024
+
+
+def _name(value: str, where: str) -> str:
+    """A resource name: 1-64 letters, digits, ``_`` or ``-``, starting with a letter or digit.
+
+    It is part of every cache key (``v1/<name>/<kind>/...``) and of log lines, so ``/`` and other
+    separators must not be able to alias another resource's key prefix.
+    """
+    if _NAME.fullmatch(value) is None:
+        raise ManifestError(f"{where}: {value!r} is not a valid resource name")
+    return value
+
+
+def _path(value: str, where: str, *, allow_url: bool = False) -> str:
+    """A server-relative request path, or (`allow_url`) an absolute http(s) URL without a query.
+
+    A path must start with a single ``/``, use only RFC 3986 path characters, and have no ``?`` or
+    ``#`` (the client appends the query itself, a fragment is never sent), no backslash, no
+    dot-segment and no percent-encoded ``.``, ``/``, ``\\`` or NUL.
+    """
+    if allow_url and "://" in value:
+        return _url(value, where)
+    if (
+        len(value) > MAX_PATH_CHARS
+        or _PATH.fullmatch(value) is None
+        or value.startswith("//")
+        or _BAD_ENCODED.search(value) is not None
+        or any(segment in {".", ".."} for segment in value.split("/"))
+    ):
+        raise ManifestError(f"{where}: {value[:80]!r} is not a valid absolute path")
+    return value
+
+
+def _url(value: str, where: str) -> str:
+    try:
+        parsed = httpx2.URL(value)
+    except httpx2.InvalidURL as exc:
+        raise ManifestError(f"{where}: not a valid URL: {exc}") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.host
+        or parsed.userinfo
+        or parsed.query
+        or parsed.fragment
+        or len(value) > MAX_PATH_CHARS
+        or _HOST.fullmatch(parsed.host) is None
+        or any(segment in {".", ".."} for segment in value.split("/"))  # httpx normalises these
+    ):
+        raise ManifestError(f"{where}: {value[:80]!r} is not a valid http(s) URL")
+    _path(parsed.raw_path.decode() or "/", where)
+    return value
+
+
+def _paths(obj: _Obj, where: str) -> dict[str, str]:
+    return {
+        k: _path(v, f"{where}.paths.{k}", allow_url=True)
+        for k, v in _object(obj, "paths", where).items()
+        if isinstance(v, str)
+    }
+
+
 def _get[T](obj: _Obj, key: str, kind: type[T] | tuple[type, ...], where: str) -> T:
     value = obj.get(key)
     if not isinstance(value, kind) or (isinstance(value, bool) and kind is not bool):
@@ -224,7 +290,7 @@ def _field(obj: _Obj, where: str) -> FieldSpec:
 def _events(obj: _Obj, where: str) -> Events:
     return Events(
         transport=_get(obj, "transport", str, where),
-        path=_get(obj, "path", str, where),
+        path=_path(_get(obj, "path", str, where), where + ".path", allow_url=True),
         resource=_get(obj, "resource", str, where),
         resume_param=_get(obj, "resume_param", str, where),
         replay=_get(obj, "replay", str, where),
@@ -265,10 +331,10 @@ def _resource(obj: _Obj, where: str) -> Resource:
     cache = _object(obj, "cache", where)
     w = where
     return Resource(
-        name=_get(obj, "name", str, w),
+        name=_name(_get(obj, "name", str, w), w + ".name"),
         title=_get(obj, "title", str, w),
         api_version=_api_version(obj, w),
-        base_path=_get(obj, "base_path", str, w),
+        base_path=_path(_get(obj, "base_path", str, w), w + ".base_path", allow_url=True),
         formats={k: v for k, v in _object(obj, "formats", w).items() if isinstance(v, str)},
         id_field=_get(obj, "id_field", str, w),
         schemas=Schemas(
@@ -290,7 +356,7 @@ def _resource(obj: _Obj, where: str) -> Resource:
             total=_get(pagination, "total", bool, w),
         ),
         capabilities=_capabilities(_object(obj, "capabilities", w), w + ".capabilities"),
-        paths={k: v for k, v in _object(obj, "paths", w).items() if isinstance(v, str)},
+        paths=_paths(obj, w),
         bulk_max_matched=_get(_object(obj, "bulk", w), "max_matched", int, w + ".bulk"),
         auth=Auth(
             scheme=_get(auth, "scheme", str, w),

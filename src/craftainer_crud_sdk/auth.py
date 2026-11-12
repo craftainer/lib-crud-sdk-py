@@ -5,18 +5,19 @@ from __future__ import annotations
 import hashlib
 import inspect
 import ipaddress
-from collections.abc import AsyncGenerator, Generator
+from collections.abc import AsyncGenerator, Collection, Generator
 from typing import cast
 
 import httpx2
 
-from craftainer_crud_sdk.errors import InsecureTransportError
+from craftainer_crud_sdk.errors import InsecureTransportError, OriginNotAllowedError
 from craftainer_crud_sdk.interfaces import (
     EXTENSION_KEY,
     AsyncTokenProvider,
     RequestContext,
     TokenProvider,
 )
+from craftainer_crud_sdk.origin import Origin, origin_of
 
 __all__ = [
     "BearerAuth",
@@ -24,6 +25,7 @@ __all__ = [
     "authorization_scope",
     "cache_scope",
     "call_provider",
+    "check_origin",
     "check_transport",
     "is_insecure_remote",
     "sent_authorization",
@@ -88,6 +90,30 @@ def is_insecure_remote(url: httpx2.URL) -> bool:
     if isinstance(address, ipaddress.IPv4Address):
         return address not in ipaddress.ip_network("127.0.0.0/8")
     return address != ipaddress.IPv6Address("::1")
+
+
+def check_origin(request: httpx2.Request, trusted: Collection[Origin] | None) -> None:
+    """Raise `OriginNotAllowedError` before a credential goes to an origin that is not trusted.
+
+    Browsers send credentials only to the origin that asked for them; this is the same rule at the
+    point of sending. `trusted` holds the `(scheme, host, port)` of `base_url` and every
+    `allowed_origins` entry; the comparison is exact (default ports filled in). Judged on the
+    request as it is sent, so a URL a hook rewrote, a caller's `client.http.get(...)` and a
+    configured ``Authorization`` header are covered. `None` switches the check off; a request
+    without ``Authorization`` is never refused.
+    """
+    if trusted is None or "Authorization" not in request.headers:
+        return
+    try:
+        allowed = origin_of(request.url) in trusted
+    except httpx2.InvalidURL, ValueError:
+        allowed = False
+    if not allowed:
+        origin = f"{request.url.scheme}://{request.url.netloc.decode()}"
+        raise OriginNotAllowedError(
+            f"refusing to send credentials to {origin}, which is not the base_url origin "
+            "or listed in allowed_origins"
+        )
 
 
 def check_transport(request: httpx2.Request, *, allow_insecure_http: bool) -> None:

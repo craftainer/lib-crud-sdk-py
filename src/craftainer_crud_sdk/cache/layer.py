@@ -42,6 +42,7 @@ from craftainer_crud_sdk.cache.keys import (
     build_key,
     event_prefixes,
     kind_prefix,
+    log_key,
     manifest_key,
     prefix_parts,
     record_prefix,
@@ -807,7 +808,7 @@ class AsyncCacheLayer:
                 raise
             await result.aclose()
         except Exception:
-            log.exception("background revalidation of %s failed", key)
+            log.exception("background revalidation of %s failed", log_key(key))
 
     # -- control surface used by events and the client ------------------------------------
 

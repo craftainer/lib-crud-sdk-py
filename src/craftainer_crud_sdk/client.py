@@ -2,8 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
 import builtins
-from collections.abc import AsyncIterator, Awaitable, Callable, Iterator, Mapping, Sequence
+from collections.abc import (
+    AsyncIterator,
+    Awaitable,
+    Callable,
+    Collection,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from dataclasses import dataclass
 from types import TracebackType
 from typing import Any, Self, TypedDict, Unpack, cast
@@ -15,17 +24,29 @@ from craftainer_crud_sdk.auth import (
     acall_provider,
     authorization_scope,
     call_provider,
+    check_origin,
     check_transport,
     sent_authorization,
     stamp_scope,
 )
+from craftainer_crud_sdk.bounds import (
+    DEFAULT_MAX_RESPONSE_BYTES,
+    DEFAULT_TOTAL_TIMEOUT,
+    Bounds,
+    abound,
+    bound,
+    is_event_stream,
+)
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
+    DeadlineExceededError,
     InvalidQueryError,
+    PaginationLimitExceededError,
     ResponseError,
     UnknownResourceError,
     problem_from_response,
+    safe_url,
 )
 from craftainer_crud_sdk.interfaces import (
     EXTENSION_KEY,
@@ -38,10 +59,11 @@ from craftainer_crud_sdk.interfaces import (
     TransportHook,
 )
 from craftainer_crud_sdk.manifest import Manifest, Resource, aload_manifest, load_manifest
-from craftainer_crud_sdk.origin import check_origins, join_same_origin
+from craftainer_crud_sdk.origin import Origin, check_origins, join_same_origin, trusted_origins
 from craftainer_crud_sdk.query import build_query, encode_params
 
 __all__ = [
+    "DEFAULT_MAX_PAGES",
     "AsyncCrudClient",
     "AsyncHookedTransport",
     "AsyncResourceClient",
@@ -53,6 +75,8 @@ __all__ = [
 ]
 
 _TIMEOUT = httpx2.Timeout(5.0)
+DEFAULT_MAX_PAGES = 1000
+"""Full pages `iter_all` reads before `PaginationLimitExceededError` (1000 x the page size)."""
 
 type JsonObject = dict[str, Any]
 type JsonList = builtins.list[JsonObject]
@@ -69,13 +93,15 @@ class HookedTransport(httpx2.BaseTransport):
     context's cache scope is set from the Authorization header the request actually carries.
     """
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         inner: httpx2.BaseTransport,
         hooks: Sequence[TransportHook],
         *,
         auth: httpx2.Auth | None = None,
         allow_insecure_http: bool = False,
+        trusted_origins: Collection[Origin] | None = None,
+        bounds: Bounds | None = None,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`.
 
@@ -86,6 +112,8 @@ class HookedTransport(httpx2.BaseTransport):
         self._hooks = list(hooks)
         self._auth = auth
         self._allow_insecure_http = allow_insecure_http
+        self._trusted_origins = trusted_origins
+        self._bounds = bounds
         for hook in self._hooks:
             self._bind(hook)
 
@@ -104,9 +132,18 @@ class HookedTransport(httpx2.BaseTransport):
         self._bind(hook)
 
     def send_raw(self, request: httpx2.Request) -> httpx2.Response:
-        """Send past all hooks (a credential over plain http to a remote host is refused first)."""
+        """Send past all hooks, the last gate before the network.
+
+        A credential is refused first when it would go to an origin outside `trusted_origins` or
+        over plain http to a remote host. The response body is then bounded by `bounds`.
+        """
+        check_origin(request, self._trusted_origins)
         check_transport(request, allow_insecure_http=self._allow_insecure_http)
-        return self._inner.handle_request(request)
+        bounds = self._bounds
+        if bounds is None or is_event_stream(request):
+            return self._inner.handle_request(request)
+        deadline = bounds.deadline()
+        return bound(self._inner.handle_request(request), bounds, deadline)
 
     def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks, but through the auth flow (token, one refresh-and-retry on 401).
@@ -159,19 +196,23 @@ class HookedTransport(httpx2.BaseTransport):
 class AsyncHookedTransport(httpx2.AsyncBaseTransport):
     """Async twin of `HookedTransport`."""
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         inner: httpx2.AsyncBaseTransport,
         hooks: Sequence[AsyncTransportHook],
         *,
         auth: httpx2.Auth | None = None,
         allow_insecure_http: bool = False,
+        trusted_origins: Collection[Origin] | None = None,
+        bounds: Bounds | None = None,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`."""
         self._inner = inner
         self._hooks = list(hooks)
         self._auth = auth
         self._allow_insecure_http = allow_insecure_http
+        self._trusted_origins = trusted_origins
+        self._bounds = bounds
         for hook in self._hooks:
             self._bind(hook)
 
@@ -190,9 +231,21 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
         self._bind(hook)
 
     async def send_raw(self, request: httpx2.Request) -> httpx2.Response:
-        """Send past all hooks (a credential over plain http to a remote host is refused first)."""
+        """Async twin of `send_raw`; the deadline also covers the wait for the headers."""
+        check_origin(request, self._trusted_origins)
         check_transport(request, allow_insecure_http=self._allow_insecure_http)
-        return await self._inner.handle_async_request(request)
+        bounds = self._bounds
+        if bounds is None or is_event_stream(request):
+            return await self._inner.handle_async_request(request)
+        deadline = bounds.deadline()
+        try:
+            async with asyncio.timeout(bounds.total_timeout):
+                response = await self._inner.handle_async_request(request)
+        except TimeoutError as exc:
+            raise DeadlineExceededError(
+                f"request did not finish within total_timeout ({bounds.total_timeout} s)"
+            ) from exc
+        return await abound(response, bounds, deadline)
 
     async def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
         """Async twin of `HookedTransport.send_authenticated`."""
@@ -325,7 +378,7 @@ def _checked(response: httpx2.Response) -> httpx2.Response:
         location = response.headers.get("location")
         raise ResponseError(
             f"unexpected {response.status_code} redirect"
-            + (f" to {location!r}" if location else "")
+            + (f" to {safe_url(location)!r}" if location else "")
             + "; the client never follows redirects",
             response,
         )
@@ -336,6 +389,22 @@ def _page_size(resource: Resource, limit: int | None) -> int:
     """The `iter_all` page size: the caller's, else the default capped at the server maximum."""
     pagination = resource.pagination
     return min(pagination.default_limit, pagination.max_limit) if limit is None else limit
+
+
+def _check_page(page: JsonList, size: int) -> None:
+    """Stop `iter_all` on a page with more rows than asked for (the server ignores `limit`)."""
+    if len(page) > size:
+        raise PaginationLimitExceededError(
+            f"the server returned {len(page)} rows for limit={size}; it ignores the limit"
+        )
+
+
+def _check_pages(pages: int, max_pages: int) -> None:
+    """Stop `iter_all` before it requests page number `max_pages + 1`."""
+    if pages >= max_pages:
+        raise PaginationLimitExceededError(
+            f"iter_all stopped after {max_pages} full pages; pass a larger max_pages to read more"
+        )
 
 
 def _decode(response: httpx2.Response) -> object:
@@ -603,10 +672,18 @@ class ResourceClient(_Plan):
         include_archived: bool | None = None,
         only_archived: bool = False,
         include_unpublished: bool | None = None,
+        max_pages: int = DEFAULT_MAX_PAGES,
     ) -> Iterator[JsonObject]:
-        """Every record, paging with `skip += limit` until a page shorter than `limit`."""
+        """Every record, paging with `skip += limit` until a page shorter than `limit`.
+
+        Raises `PaginationLimitExceededError` when `max_pages` full pages did not reach the end
+        (default `DEFAULT_MAX_PAGES`; pass a larger bound for a bigger collection) or when a
+        page holds more rows than `limit` (a server that ignores `limit`/`skip`).
+        """
         size = _page_size(self.resource, limit)
+        pages = 0
         while True:
+            _check_pages(pages, max_pages)
             page = self.list(
                 filters,
                 sort,
@@ -616,9 +693,11 @@ class ResourceClient(_Plan):
                 only_archived=only_archived,
                 include_unpublished=include_unpublished,
             )
+            _check_page(page, size)
             yield from page
             if len(page) < size:
                 return
+            pages += 1
             skip += size
 
     def get(self, record_id: int) -> JsonObject:
@@ -707,6 +786,8 @@ class CrudClient:
         headers: Mapping[str, str] | None = None,
         allowed_origins: Sequence[str] | None = None,
         allow_insecure_http: bool = False,
+        total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
+        max_response_bytes: int | None = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         """`base_url` is the server origin (or any URL on it); `manifest_url` skips discovery.
 
@@ -725,6 +806,18 @@ class CrudClient:
         `*.localhost`, `127.0.0.0/8`, `::1`). The check runs on the request as it is sent (the
         auth flow, a configured header, hook background requests and event streams included).
         `allow_insecure_http=True` lifts it, for a trusted network only.
+
+        A request that carries an `Authorization` header is also refused with
+        `OriginNotAllowedError` before it is sent when its origin (scheme, host, port) is not
+        `base_url`'s or one of `allowed_origins`, whoever built the request (`client.http.get(...)`
+        included). That includes an explicit `manifest_url` on another origin: list it too.
+
+        `timeout` is httpx's per-phase timeout (the read timeout restarts at every chunk).
+        `total_timeout` (seconds, default 30) is the wall-clock limit for one request from
+        sending to the last body byte, `DeadlineExceededError` when passed. `max_response_bytes`
+        (default 16 MiB) caps the decoded body of a response, `ResponseTooLargeError` when passed.
+        `None` switches either off. Event streams are exempt from both. The sync client cannot
+        interrupt a blocked read, so it can overrun `total_timeout` by one `timeout` phase.
         """
         self.base_url = base_url
         self.allowed_origins: tuple[str, ...] = check_origins(allowed_origins)
@@ -737,6 +830,8 @@ class CrudClient:
             hooks,
             auth=auth,
             allow_insecure_http=allow_insecure_http,
+            trusted_origins=trusted_origins(base_url, self.allowed_origins),
+            bounds=Bounds(total_timeout, max_response_bytes),
         )
         self._http = httpx2.Client(
             transport=self._transport,
@@ -890,10 +985,13 @@ class AsyncResourceClient(_Plan):
         include_archived: bool | None = None,
         only_archived: bool = False,
         include_unpublished: bool | None = None,
+        max_pages: int = DEFAULT_MAX_PAGES,
     ) -> AsyncIterator[JsonObject]:
-        """Every record, paging with `skip += limit` until a page shorter than `limit`."""
+        """As `ResourceClient.iter_all`, with `max_pages` and `PaginationLimitExceededError`."""
         size = _page_size(self.resource, limit)
+        pages = 0
         while True:
+            _check_pages(pages, max_pages)
             page = await self.list(
                 filters,
                 sort,
@@ -903,10 +1001,12 @@ class AsyncResourceClient(_Plan):
                 only_archived=only_archived,
                 include_unpublished=include_unpublished,
             )
+            _check_page(page, size)
             for record in page:
                 yield record
             if len(page) < size:
                 return
+            pages += 1
             skip += size
 
     async def get(self, record_id: int) -> JsonObject:
@@ -997,6 +1097,8 @@ class AsyncCrudClient:
         headers: Mapping[str, str] | None = None,
         allowed_origins: Sequence[str] | None = None,
         allow_insecure_http: bool = False,
+        total_timeout: float | None = DEFAULT_TOTAL_TIMEOUT,
+        max_response_bytes: int | None = DEFAULT_MAX_RESPONSE_BYTES,
     ) -> None:
         """As `CrudClient` (also its options); the token provider may be sync or async."""
         self.base_url = base_url
@@ -1010,6 +1112,8 @@ class AsyncCrudClient:
             hooks,
             auth=auth,
             allow_insecure_http=allow_insecure_http,
+            trusted_origins=trusted_origins(base_url, self.allowed_origins),
+            bounds=Bounds(total_timeout, max_response_bytes),
         )
         self._http = httpx2.AsyncClient(
             transport=self._transport,

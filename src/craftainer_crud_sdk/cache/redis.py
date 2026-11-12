@@ -3,6 +3,15 @@
 Values are JSON with a base64 body, written with ``SET ... PX``. ``clear`` only ever touches keys
 under the store's namespace (``SCAN`` plus ``UNLINK`` in batches, never ``FLUSHDB``). An outage
 or a corrupt value is a miss and a logged warning; it never fails the request.
+
+Trust boundary: entries are plain JSON with no encryption and no integrity tag (no HMAC), and
+they sit under keys that carry only a hash of the caller's token. Anyone who can read the Redis
+instance reads every cached response of every caller; anyone who can write to it can plant a
+response (and an ETag later used as ``If-Match``) that the client returns as if the server had
+sent it. Treat the Redis instance as part of the application's own trust boundary: keep it on a
+private network, require authentication and TLS in the ``redis.Redis`` client you pass in,
+restrict its ACLs to this application, and use one namespace per server. If it is shared with
+less-trusted parties, use `MemoryStore` instead.
 """
 
 import logging
@@ -13,6 +22,7 @@ import redis as redis_sync
 import redis.asyncio as redis_async
 
 from craftainer_crud_sdk.cache.entry import entry_from_json, entry_to_json
+from craftainer_crud_sdk.cache.keys import log_key
 from craftainer_crud_sdk.interfaces import CacheEntry
 
 __all__ = ["AsyncRedisStore", "RedisStore"]
@@ -88,7 +98,7 @@ class RedisStore:
         try:
             return entry_from_json(raw)
         except _MISSING_OR_CORRUPT as exc:
-            log.warning("corrupt cache value for %s, treating as a miss: %s", key, exc)
+            log.warning("corrupt cache value for %s, treating as a miss: %s", log_key(key), exc)
             return None
 
     def set(self, key: str, entry: CacheEntry, ttl: float | None = None) -> None:
@@ -170,7 +180,7 @@ class AsyncRedisStore:
         try:
             return entry_from_json(raw)
         except _MISSING_OR_CORRUPT as exc:
-            log.warning("corrupt cache value for %s, treating as a miss: %s", key, exc)
+            log.warning("corrupt cache value for %s, treating as a miss: %s", log_key(key), exc)
             return None
 
     async def set(self, key: str, entry: CacheEntry, ttl: float | None = None) -> None:

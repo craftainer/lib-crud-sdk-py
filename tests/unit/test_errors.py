@@ -51,7 +51,9 @@ def test_full_problem_members() -> None:
         json={"type": "https://e/x", "title": "Gone", "instance": "/a/1", "detail": "nope"},
     )
     error = problem_from_response(response)
-    assert (error.type, error.instance, error.response) == ("https://e/x", "/a/1", response)
+    assert (error.type, error.instance) == ("https://e/x", "/a/1")
+    assert error.response is not None
+    assert error.response.status_code == 404  # a redacted copy, not the original
     assert error.errors == ()
 
 
