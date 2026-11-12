@@ -10,6 +10,7 @@ import pytest
 
 from craftainer_crud_sdk import (
     AsyncCrudClient,
+    AsyncHookedTransport,
     CrudClient,
     DeadlineExceededError,
     HookedTransport,
@@ -84,10 +85,8 @@ def test_a_streamed_body_is_counted_without_a_content_length() -> None:
     def handler(_r: httpx2.Request) -> httpx2.Response:
         return httpx2.Response(200, stream=_Chunks([b"x" * 60, b"x" * 60]))
 
-    with _sync(handler, max_response_bytes=100) as client:
-        with pytest.raises(ResponseTooLargeError):
-            client.http.get(f"{BASE}/x")
-        assert client.http.get(f"{BASE}/x", headers={"Accept": "text/event-stream"}).content
+    with _sync(handler, max_response_bytes=100) as client, pytest.raises(ResponseTooLargeError):
+        client.http.get(f"{BASE}/x")
 
 
 def test_a_compression_bomb_counts_at_its_inflated_size() -> None:
@@ -158,7 +157,9 @@ def test_limits_can_be_switched_off_and_event_streams_are_exempt() -> None:
     """`None` disables a limit; `Accept: text/event-stream` skips both."""
 
     def handler(_r: httpx2.Request) -> httpx2.Response:
-        return httpx2.Response(200, stream=_Chunks([b"x" * 300], pause=0.0))
+        return httpx2.Response(
+            200, headers={"Content-Type": "text/event-stream"}, stream=_Chunks([b"x" * 300])
+        )
 
     with _sync(handler, total_timeout=None, max_response_bytes=None) as client:
         assert len(client.http.get(f"{BASE}/x").content) == 300
@@ -168,20 +169,52 @@ def test_limits_can_be_switched_off_and_event_streams_are_exempt() -> None:
     assert is_event_stream(httpx2.Request("GET", BASE, headers={"Accept": "Text/Event-Stream"}))
 
 
-def test_a_bare_hooked_transport_is_unbounded() -> None:
-    """Direct construction without bounds keeps the plain behaviour."""
-    transport = HookedTransport(
-        httpx2.MockTransport(lambda _r: httpx2.Response(200, content=b"x" * 100)), []
-    )
-    with httpx2.Client(transport=transport) as client:
+def test_a_bare_hooked_transport_is_bounded_by_default_and_needs_origins() -> None:
+    """Direct construction gets the default bounds; `bounds=None` switches them off."""
+    big = httpx2.MockTransport(lambda _r: httpx2.Response(200, content=b"x" * 100))
+    with pytest.raises(TypeError, match="trusted_origins"):
+        HookedTransport(big, [])  # type: ignore[call-arg]
+    transport = HookedTransport(big, [], trusted_origins=None, bounds=Bounds(max_response_bytes=10))
+    with httpx2.Client(transport=transport) as client, pytest.raises(ResponseTooLargeError):
+        client.get(f"{BASE}/x")
+    unbounded = HookedTransport(big, [], trusted_origins=None, bounds=None)
+    with httpx2.Client(transport=unbounded) as client:
         assert len(client.get(f"{BASE}/x").content) == 100
+
+
+def test_bodyless_responses_may_declare_an_entity_length() -> None:
+    """HEAD, 204 and 304 name the entity's Content-Length without sending it."""
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        status = {"/head": 200, "/nocontent": 204, "/notmodified": 304}[request.url.path]
+        return httpx2.Response(status, headers={"Content-Length": "99999999999"})
+
+    with _sync(handler, max_response_bytes=100) as client:
+        assert client.http.head(f"{BASE}/head").status_code == 200
+        assert client.http.get(f"{BASE}/nocontent").status_code == 204
+        assert client.http.get(f"{BASE}/notmodified").status_code == 304
+
+
+def test_an_sse_accept_header_alone_does_not_lift_the_bounds() -> None:
+    """The exemption needs an event-stream answer: a huge non-SSE body is still refused."""
+
+    def handler(_r: httpx2.Request) -> httpx2.Response:
+        return httpx2.Response(
+            200, headers={"Content-Type": "text/html"}, stream=_Chunks([b"x" * 60, b"x" * 60])
+        )
+
+    with (
+        _sync(handler, max_response_bytes=100) as client,
+        pytest.raises(ResponseTooLargeError),
+    ):
+        client.http.get(f"{BASE}/e", headers={"Accept": "text/event-stream"})
 
 
 def test_bound_closes_a_refused_response() -> None:
     """The refused response is closed."""
     response = httpx2.Response(200, stream=_Chunks([b"x"]), headers={"Content-Length": "9"})
     with pytest.raises(ResponseTooLargeError):
-        bound(response, Bounds(max_response_bytes=5), None)
+        bound(httpx2.Request("GET", BASE), response, Bounds(max_response_bytes=5), None)
     assert response.is_closed
 
 
@@ -196,7 +229,11 @@ async def test_async_cap_deadline_and_header_wait() -> None:
     def handler(request: httpx2.Request) -> httpx2.Response:
         path = request.url.path
         if path == "/big":
-            return httpx2.Response(200, stream=_AsyncChunks([b"x" * 60, b"x" * 60]))
+            return httpx2.Response(
+                200,
+                headers={"Content-Type": "text/event-stream"},
+                stream=_AsyncChunks([b"x" * 60, b"x" * 60]),
+            )
         if path == "/declared":
             return httpx2.Response(
                 200, headers={"content-length": "999"}, stream=_AsyncChunks([b"x"])
@@ -248,7 +285,7 @@ async def test_async_limits_off_and_abound_closes_on_refusal() -> None:
         assert len((await client.http.get(f"{BASE}/x")).content) == 300
     response = httpx2.Response(200, stream=_AsyncChunks([b"x"]), headers={"Content-Length": "9"})
     with pytest.raises(ResponseTooLargeError):
-        await abound(response, Bounds(max_response_bytes=5), None)
+        await abound(httpx2.Request("GET", BASE), response, Bounds(max_response_bytes=5), None)
     assert response.is_closed
 
 
@@ -273,10 +310,16 @@ def test_iter_all_stops_at_max_pages() -> None:
     assert len(rows) == 6
 
 
-def test_iter_all_reads_exactly_max_pages_when_the_data_ends_there() -> None:
-    """A collection that ends within the bound is read completely."""
+def test_iter_all_reads_a_collection_that_ends_exactly_at_the_bound() -> None:
+    """Short last page, or exactly max_pages full pages followed by an empty one."""
     with _sync(_pager(5)) as client:
         assert len(list(client.resource("heroes").iter_all(limit=2, max_pages=3))) == 5
+    with _sync(_pager(6)) as client:
+        assert len(list(client.resource("heroes").iter_all(limit=2, max_pages=3))) == 6
+        with pytest.raises(PaginationLimitExceededError):
+            list(client.resource("heroes").iter_all(limit=2, max_pages=2))
+        with pytest.raises(PaginationLimitExceededError):
+            list(client.resource("heroes").iter_all(limit=2, max_pages=0))
 
 
 def test_iter_all_rejects_a_server_that_ignores_limit() -> None:
@@ -302,9 +345,10 @@ async def test_async_iter_all_bounds() -> None:
         heroes = await client.resource("heroes")
         with pytest.raises(PaginationLimitExceededError, match="ignores"):
             _ = [r async for r in heroes.iter_all(limit=2)]
-    async with AsyncCrudClient(BASE, transport=make_transport(_pager(3))) as client:  # type: ignore[arg-type]
+    async with AsyncCrudClient(BASE, transport=make_transport(_pager(4))) as client:  # type: ignore[arg-type]
         heroes = await client.resource("heroes")
-        assert len([r async for r in heroes.iter_all(limit=2)]) == 3
+        assert len([r async for r in heroes.iter_all(limit=2)]) == 4
+        assert len([r async for r in heroes.iter_all(limit=2, max_pages=2)]) == 4
 
 
 def test_event_streams_through_the_client_are_not_capped() -> None:
@@ -323,3 +367,25 @@ def test_event_streams_through_the_client_are_not_capped() -> None:
         client.http.sse(f"{BASE}/events") as source,
     ):
         assert len(list(source)) == 10
+
+
+@pytest.mark.asyncio
+async def test_a_timeout_error_from_the_transport_is_not_reported_as_our_deadline() -> None:
+    """Only the expiry of `total_timeout` becomes `DeadlineExceededError`."""
+
+    async def boom(_r: httpx2.Request) -> httpx2.Response:
+        raise TimeoutError("inner")
+
+    async with AsyncCrudClient(BASE, transport=httpx2.MockTransport(boom)) as client:
+        with pytest.raises(TimeoutError, match="inner") as info:
+            await client.http.get(f"{BASE}/x")
+    assert not isinstance(info.value, DeadlineExceededError)
+
+
+@pytest.mark.asyncio
+async def test_a_bare_async_hooked_transport_without_bounds_is_unbounded() -> None:
+    """`bounds=None` on the async transport switches both limits off."""
+    big = httpx2.MockTransport(lambda _r: httpx2.Response(200, content=b"x" * 100))
+    transport = AsyncHookedTransport(big, [], trusted_origins=None, bounds=None)
+    async with httpx2.AsyncClient(transport=transport) as client:
+        assert len((await client.get(f"{BASE}/x")).content) == 100

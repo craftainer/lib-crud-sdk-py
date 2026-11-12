@@ -17,7 +17,7 @@ from dataclasses import dataclass
 
 import httpx2
 
-from craftainer_crud_sdk.errors import DeadlineExceededError, ResponseTooLargeError
+from craftainer_crud_sdk.errors import FRAMING_HEADERS, DeadlineExceededError, ResponseTooLargeError
 
 __all__ = [
     "DEFAULT_MAX_RESPONSE_BYTES",
@@ -26,14 +26,13 @@ __all__ = [
     "abound",
     "bound",
     "is_event_stream",
+    "late",
 ]
 
 DEFAULT_TOTAL_TIMEOUT = 30.0
 """Seconds for one request, from sending to the last body byte (6 x httpx's 5 s phase default)."""
 DEFAULT_MAX_RESPONSE_BYTES = 16 * 1024 * 1024
 """Decoded body bytes accepted per response (16 MiB)."""
-
-_FRAMING = frozenset({"content-encoding", "content-length", "transfer-encoding"})
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,23 +55,39 @@ class Bounds:
 
 
 def is_event_stream(request: httpx2.Request) -> bool:
-    """Whether the request asks for server-sent events (exempt from the bounds)."""
+    """Whether the request asks for server-sent events."""
     return "text/event-stream" in request.headers.get("Accept", "").lower()
+
+
+def _exempt(request: httpx2.Request, response: httpx2.Response) -> bool:
+    """Whether the bounds are skipped: an event stream was asked for and one was answered."""
+    content_type = response.headers.get("Content-Type", "").lower()
+    return is_event_stream(request) and content_type.startswith("text/event-stream")
+
+
+_NO_BODY = frozenset({httpx2.codes.NO_CONTENT, httpx2.codes.NOT_MODIFIED})
+_OK = httpx2.codes.OK
 
 
 def _too_large(limit: int) -> ResponseTooLargeError:
     return ResponseTooLargeError(f"response body is larger than max_response_bytes ({limit} bytes)")
 
 
-def _late(bounds: Bounds) -> DeadlineExceededError:
+def late(bounds: Bounds) -> DeadlineExceededError:
+    """The error for a request that outlived `bounds.total_timeout`."""
     return DeadlineExceededError(
         f"request did not finish within total_timeout ({bounds.total_timeout} s)"
     )
 
 
-def _declared(response: httpx2.Response, bounds: Bounds) -> None:
-    """Refuse before reading when a plain (undecoded) ``Content-Length`` already exceeds the cap."""
+def _declared(request: httpx2.Request, response: httpx2.Response, bounds: Bounds) -> None:
+    """Refuse before reading when a plain (undecoded) ``Content-Length`` already exceeds the cap.
+
+    A response without a body (``HEAD``, ``1xx``, ``204``, ``304``) may name its entity's length.
+    """
     limit = bounds.max_response_bytes
+    if request.method == "HEAD" or response.status_code in _NO_BODY or response.status_code < _OK:
+        return
     raw = response.headers.get("content-length")
     if limit is not None and raw is not None and raw.isdecimal() and int(raw) > limit:
         raise _too_large(limit)
@@ -81,7 +96,9 @@ def _declared(response: httpx2.Response, bounds: Bounds) -> None:
 def _copy(
     response: httpx2.Response, stream: httpx2.SyncByteStream | httpx2.AsyncByteStream
 ) -> httpx2.Response:
-    headers = [(k, v) for k, v in response.headers.multi_items() if k.lower() not in _FRAMING]
+    headers = [
+        (k, v) for k, v in response.headers.multi_items() if k.lower() not in FRAMING_HEADERS
+    ]
     # The client sets `request` on whatever the transport returns, so it is not copied.
     return httpx2.Response(
         response.status_code, headers=headers, stream=stream, extensions=response.extensions
@@ -99,7 +116,7 @@ class _Counter:
             return None
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise _late(self.bounds)
+            raise late(self.bounds)
         return left
 
     def count(self, chunk: bytes) -> None:
@@ -139,7 +156,7 @@ class _AsyncBounded(httpx2.AsyncByteStream):
                 except StopAsyncIteration:
                     return
                 except TimeoutError as exc:
-                    raise _late(self._counter.bounds) from exc
+                    raise late(self._counter.bounds) from exc
                 self._counter.count(chunk)
                 yield chunk
         finally:
@@ -149,11 +166,19 @@ class _AsyncBounded(httpx2.AsyncByteStream):
         await self._source.aclose()
 
 
-def bound(response: httpx2.Response, bounds: Bounds, deadline: float | None) -> httpx2.Response:
-    """`response` with its body bounded (a response already read is only measured)."""
+def bound(
+    request: httpx2.Request, response: httpx2.Response, bounds: Bounds, deadline: float | None
+) -> httpx2.Response:
+    """`response` with its body bounded (a response already read is only measured).
+
+    An event stream the request asked for and the response is (``Content-Type``) is returned as
+    it is.
+    """
+    if _exempt(request, response):
+        return response
     counter = _Counter(bounds, deadline)
     try:
-        _declared(response, bounds)
+        _declared(request, response, bounds)
         counter.remaining()
         try:
             counter.count(response.content)
@@ -166,12 +191,14 @@ def bound(response: httpx2.Response, bounds: Bounds, deadline: float | None) -> 
 
 
 async def abound(
-    response: httpx2.Response, bounds: Bounds, deadline: float | None
+    request: httpx2.Request, response: httpx2.Response, bounds: Bounds, deadline: float | None
 ) -> httpx2.Response:
     """Async twin of `bound`."""
+    if _exempt(request, response):
+        return response
     counter = _Counter(bounds, deadline)
     try:
-        _declared(response, bounds)
+        _declared(request, response, bounds)
         counter.remaining()
         try:
             counter.count(response.content)

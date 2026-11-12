@@ -14,6 +14,7 @@ import httpx2
 
 from craftainer_crud_sdk.errors import ConnectionFailed, ManifestError, problem_from_response
 from craftainer_crud_sdk.interfaces import EXTENSION_KEY, RequestContext
+from craftainer_crud_sdk.keepalive import clamp_keepalive
 from craftainer_crud_sdk.origin import join_same_origin
 
 __all__ = [
@@ -198,7 +199,7 @@ def _name(value: str, where: str) -> str:
     separators must not be able to alias another resource's key prefix.
     """
     if _NAME.fullmatch(value) is None:
-        raise ManifestError(f"{where}: {value!r} is not a valid resource name")
+        raise ManifestError(f"{where}: {value[:80]!r} is not a valid resource name")
     return value
 
 
@@ -226,7 +227,7 @@ def _url(value: str, where: str) -> str:
     try:
         parsed = httpx2.URL(value)
     except httpx2.InvalidURL as exc:
-        raise ManifestError(f"{where}: not a valid URL: {exc}") from exc
+        raise ManifestError(f"{where}: not a valid URL: {str(exc)[:80]}") from exc
     if (
         parsed.scheme not in {"http", "https"}
         or not parsed.host
@@ -294,7 +295,7 @@ def _events(obj: _Obj, where: str) -> Events:
         resource=_get(obj, "resource", str, where),
         resume_param=_get(obj, "resume_param", str, where),
         replay=_get(obj, "replay", str, where),
-        keepalive_seconds=float(_get(obj, "keepalive_seconds", (int, float), where)),
+        keepalive_seconds=clamp_keepalive(_get(obj, "keepalive_seconds", (int, float), where)),
         actions=_strs(obj, "actions", where),
     )
 

@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 
 from craftainer_crud_sdk import ManifestError, parse_manifest
-from craftainer_crud_sdk.events import (
+from craftainer_crud_sdk.keepalive import (
     DEFAULT_KEEPALIVE,
     MAX_KEEPALIVE,
     MIN_KEEPALIVE,
@@ -111,8 +111,19 @@ def test_valid_paths_pass(path: str) -> None:
         (True, DEFAULT_KEEPALIVE),
         ("10", DEFAULT_KEEPALIVE),
         (None, DEFAULT_KEEPALIVE),
+        (10**400, DEFAULT_KEEPALIVE),
     ],
 )
 def test_keepalive_is_clamped(raw: object, expected: float) -> None:
     """A huge or odd keep-alive cannot switch dead-stream detection off."""
     assert clamp_keepalive(raw) == expected
+
+
+def test_the_parsed_manifest_carries_the_clamped_keepalive() -> None:
+    """`Events.keepalive_seconds` is the value actually used, and a huge int does not crash."""
+    for raw, expected in ((1e9, MAX_KEEPALIVE), (10**400, DEFAULT_KEEPALIVE), (3, 3.0)):
+        doc = _doc()
+        doc["resources"][0]["capabilities"]["events"]["keepalive_seconds"] = raw
+        events = parse_manifest(doc).resources[0].capabilities.events
+        assert events is not None
+        assert events.keepalive_seconds == expected

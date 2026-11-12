@@ -131,3 +131,28 @@ def test_helpers() -> None:
     for bad in ("not a url", "ftp://x.example", "http://\x00/"):
         with pytest.raises(ValueError, match="URL"):
             trusted_origins(bad)
+
+
+@pytest.mark.parametrize(
+    "header", ["Cookie", "X-Api-Key", "X-Auth-Token", "X-CSRF-Token", "X-Session-Id"]
+)
+def test_other_credential_headers_are_pinned_to_the_trusted_origins_too(header: str) -> None:
+    """A cookie or API key configured on the client does not leave the trusted origins either."""
+    seen: list[httpx2.Request] = []
+    client = CrudClient(
+        BASE,
+        headers={header: "secret"},
+        transport=make_transport(lambda _r: httpx2.Response(200, json=[]), seen=seen),
+    )
+    with client:
+        assert client.http.get(f"{BASE}/x").status_code == 200
+        with pytest.raises(OriginNotAllowedError):
+            client.http.get(f"{EVIL}/x")
+    assert len(seen) == 1
+
+
+def test_a_base_url_that_is_not_an_http_origin_fails_at_construction() -> None:
+    """Fail closed early: there is no origin to trust."""
+    for bad in ("api.example.com", "localhost:8000", "ftp://x.example"):
+        with pytest.raises(ValueError, match="URL"):
+            CrudClient(bad)

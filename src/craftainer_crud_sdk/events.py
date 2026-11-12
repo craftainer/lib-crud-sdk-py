@@ -24,6 +24,7 @@ import httpx2
 
 from craftainer_crud_sdk.cache.layer import AsyncCacheLayer, CacheLayer
 from craftainer_crud_sdk.interfaces import CrudEvent
+from craftainer_crud_sdk.keepalive import clamp_keepalive
 
 __all__ = [
     "AsyncEventSubscriber",
@@ -48,26 +49,6 @@ BACKOFF_MAX = 30.0
 # float past ~1024).
 _MAX_EXPONENT = max(0, math.ceil(math.log2(BACKOFF_MAX / BACKOFF_START)))
 DEAD_AFTER_KEEPALIVES = 3
-DEFAULT_KEEPALIVE = 15.0
-MIN_KEEPALIVE = 1.0
-MAX_KEEPALIVE = 60.0
-
-
-def clamp_keepalive(value: object) -> float:
-    """The keep-alive interval to use for a manifest `keepalive_seconds`.
-
-    Missing, non-numeric, ``NaN``, infinite or non-positive values give `DEFAULT_KEEPALIVE`; any
-    other value is clamped to [`MIN_KEEPALIVE`, `MAX_KEEPALIVE`]. The read timeout is three
-    intervals, so a huge value cannot switch dead-stream detection off.
-    """
-    if isinstance(value, bool) or not isinstance(value, int | float):
-        return DEFAULT_KEEPALIVE
-    seconds = float(value)
-    if not math.isfinite(seconds) or seconds <= 0:
-        return DEFAULT_KEEPALIVE
-    return min(max(seconds, MIN_KEEPALIVE), MAX_KEEPALIVE)
-
-
 _ACTIONS = frozenset({"create", "update", "delete", "restore"})
 
 type _Action = Literal["create", "update", "delete", "restore"]

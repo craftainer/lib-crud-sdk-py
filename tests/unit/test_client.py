@@ -489,7 +489,7 @@ def test_hooked_transport_directly_and_close() -> None:
             """Close."""
             closed.append(True)
 
-    transport = HookedTransport(Inner(), [])
+    transport = HookedTransport(Inner(), [], trusted_origins=None)
     assert transport.handle_request(httpx2.Request("GET", BASE)).status_code == 200
     transport.close()
     assert closed == [True]

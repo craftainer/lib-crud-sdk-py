@@ -36,11 +36,11 @@ from craftainer_crud_sdk.bounds import (
     abound,
     bound,
     is_event_stream,
+    late,
 )
 from craftainer_crud_sdk.errors import (
     CapabilityError,
     ConnectionFailed,
-    DeadlineExceededError,
     InvalidQueryError,
     PaginationLimitExceededError,
     ResponseError,
@@ -75,6 +75,7 @@ __all__ = [
 ]
 
 _TIMEOUT = httpx2.Timeout(5.0)
+DEFAULT_BOUNDS = Bounds()
 DEFAULT_MAX_PAGES = 1000
 """Full pages `iter_all` reads before `PaginationLimitExceededError` (1000 x the page size)."""
 
@@ -98,12 +99,16 @@ class HookedTransport(httpx2.BaseTransport):
         inner: httpx2.BaseTransport,
         hooks: Sequence[TransportHook],
         *,
+        trusted_origins: Collection[Origin] | None,
         auth: httpx2.Auth | None = None,
         allow_insecure_http: bool = False,
-        trusted_origins: Collection[Origin] | None = None,
-        bounds: Bounds | None = None,
+        bounds: Bounds | None = DEFAULT_BOUNDS,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`.
+
+        `trusted_origins` is required: the `(scheme, host, port)` origins a credential may be sent
+        to (see `origin.trusted_origins`); `None` is an explicit opt-out of that check. `bounds`
+        defaults to a 30 s deadline and a 16 MiB cap; `None` switches them off.
 
         `auth` is the client's auth flow, which only `send_authenticated` runs (the client's own
         requests get it from the `httpx2.Client`).
@@ -140,10 +145,10 @@ class HookedTransport(httpx2.BaseTransport):
         check_origin(request, self._trusted_origins)
         check_transport(request, allow_insecure_http=self._allow_insecure_http)
         bounds = self._bounds
-        if bounds is None or is_event_stream(request):
+        if bounds is None:
             return self._inner.handle_request(request)
         deadline = bounds.deadline()
-        return bound(self._inner.handle_request(request), bounds, deadline)
+        return bound(request, self._inner.handle_request(request), bounds, deadline)
 
     def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
         """Send past all hooks, but through the auth flow (token, one refresh-and-retry on 401).
@@ -201,10 +206,10 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
         inner: httpx2.AsyncBaseTransport,
         hooks: Sequence[AsyncTransportHook],
         *,
+        trusted_origins: Collection[Origin] | None,
         auth: httpx2.Auth | None = None,
         allow_insecure_http: bool = False,
-        trusted_origins: Collection[Origin] | None = None,
-        bounds: Bounds | None = None,
+        bounds: Bounds | None = DEFAULT_BOUNDS,
     ) -> None:
         """Wrap `inner`; hooks that implement `BindsTransport` receive `send_authenticated`."""
         self._inner = inner
@@ -235,17 +240,19 @@ class AsyncHookedTransport(httpx2.AsyncBaseTransport):
         check_origin(request, self._trusted_origins)
         check_transport(request, allow_insecure_http=self._allow_insecure_http)
         bounds = self._bounds
-        if bounds is None or is_event_stream(request):
+        if bounds is None:
             return await self._inner.handle_async_request(request)
         deadline = bounds.deadline()
+        # An event stream's headers wait is governed by the stream's own timeouts.
+        limit = None if is_event_stream(request) else bounds.total_timeout
         try:
-            async with asyncio.timeout(bounds.total_timeout):
+            async with asyncio.timeout(limit) as scope:
                 response = await self._inner.handle_async_request(request)
         except TimeoutError as exc:
-            raise DeadlineExceededError(
-                f"request did not finish within total_timeout ({bounds.total_timeout} s)"
-            ) from exc
-        return await abound(response, bounds, deadline)
+            if not scope.expired():  # raised by the transport itself, not by our deadline
+                raise
+            raise late(bounds) from exc
+        return await abound(request, response, bounds, deadline)
 
     async def send_authenticated(self, request: httpx2.Request) -> httpx2.Response:
         """Async twin of `HookedTransport.send_authenticated`."""
@@ -399,12 +406,15 @@ def _check_page(page: JsonList, size: int) -> None:
         )
 
 
-def _check_pages(pages: int, max_pages: int) -> None:
-    """Stop `iter_all` before it requests page number `max_pages + 1`."""
-    if pages >= max_pages:
+def _past_bound(page: JsonList, pages: int, max_pages: int) -> bool:
+    """Whether `page` is the one after the `max_pages`-th: the end if empty, else an error."""
+    if pages < max_pages:
+        return False
+    if page:
         raise PaginationLimitExceededError(
             f"iter_all stopped after {max_pages} full pages; pass a larger max_pages to read more"
         )
+    return True
 
 
 def _decode(response: httpx2.Response) -> object:
@@ -683,7 +693,6 @@ class ResourceClient(_Plan):
         size = _page_size(self.resource, limit)
         pages = 0
         while True:
-            _check_pages(pages, max_pages)
             page = self.list(
                 filters,
                 sort,
@@ -694,6 +703,8 @@ class ResourceClient(_Plan):
                 include_unpublished=include_unpublished,
             )
             _check_page(page, size)
+            if _past_bound(page, pages, max_pages):
+                return
             yield from page
             if len(page) < size:
                 return
@@ -799,7 +810,7 @@ class CrudClient:
         catalog's `describedby` link) must be on `base_url`'s origin, or the join raises
         `ManifestError`, so the bearer token never goes to another host. `allowed_origins`
         (for example `["https://events.example.com"]`) opts further origins in. An explicit
-        `manifest_url` is trusted as given.
+        `manifest_url` skips that join check but not the credential guard below.
 
         A request that carries an `Authorization` header is refused with `InsecureTransportError`
         before it is sent when its URL is plain `http:` and the host is not loopback (`localhost`,
@@ -807,10 +818,11 @@ class CrudClient:
         auth flow, a configured header, hook background requests and event streams included).
         `allow_insecure_http=True` lifts it, for a trusted network only.
 
-        A request that carries an `Authorization` header is also refused with
-        `OriginNotAllowedError` before it is sent when its origin (scheme, host, port) is not
-        `base_url`'s or one of `allowed_origins`, whoever built the request (`client.http.get(...)`
-        included). That includes an explicit `manifest_url` on another origin: list it too.
+        A request that carries a credential header (`Authorization`, `Cookie`, or a name with token,
+        secret, api key, csrf or session in it) is also refused with `OriginNotAllowedError`
+        before it is sent when its origin (scheme, host, port) is not `base_url`'s or one of
+        `allowed_origins`, whoever built the request (`client.http.get(...)` included). That
+        includes an explicit `manifest_url` on another origin: list it too.
 
         `timeout` is httpx's per-phase timeout (the read timeout restarts at every chunk).
         `total_timeout` (seconds, default 30) is the wall-clock limit for one request from
@@ -991,7 +1003,6 @@ class AsyncResourceClient(_Plan):
         size = _page_size(self.resource, limit)
         pages = 0
         while True:
-            _check_pages(pages, max_pages)
             page = await self.list(
                 filters,
                 sort,
@@ -1002,6 +1013,8 @@ class AsyncResourceClient(_Plan):
                 include_unpublished=include_unpublished,
             )
             _check_page(page, size)
+            if _past_bound(page, pages, max_pages):
+                return
             for record in page:
                 yield record
             if len(page) < size:

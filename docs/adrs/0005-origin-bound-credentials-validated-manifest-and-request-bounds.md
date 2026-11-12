@@ -6,7 +6,8 @@ Proposed
 
 ## Context
 
-An OWASP review of the Python SDK (12 Low findings) showed that the same-origin guard of ADR 0003
+This amends [ADR 0003](0003-same-origin-urls-fail-safe-clears-and-resilient-sse.md), which
+trusted an explicit `manifest_url` as given; that exemption ends here. An OWASP review of the Python SDK (12 Low findings) showed that the same-origin guard of ADR 0003
 covers only the URLs the SDK joins itself. The token is attached by the auth flow of an
 `httpx2.Client` that `CrudClient.http` exposes, so `client.http.get(url)`, an explicit
 `manifest_url` or a hook that rewrites a URL send it wherever the URL points. Manifest-supplied
@@ -22,18 +23,21 @@ cache keys (token hash, filter values) were logged.
 
 - A send-time guard in the transport (below the hooks and the auth flow, next to ADR 0004's
   check) refuses any request that carries `Authorization` to an origin outside `base_url` plus
-  `allowed_origins` with `OriginNotAllowedError`. The comparison is exact on scheme, host and port
-  with default ports filled in, the rule browsers apply to credentials. No exception is made for
-  an explicit `manifest_url`: the caller adds its origin to `allowed_origins`. A bare
-  `HookedTransport` built without `trusted_origins` keeps the old behaviour (no guard); the
-  clients always pass it.
+  `allowed_origins` with `OriginNotAllowedError`. A credential is `Authorization` or a header
+  whose name contains cookie, token, secret, api key, csrf/xsrf, session or credential (the same
+  list the redaction uses). The comparison is exact on scheme, host and port with default ports
+  filled in, the rule browsers apply to credentials. No exception is made for an explicit
+  `manifest_url`: the caller adds its origin to `allowed_origins`. `HookedTransport` and
+  `AsyncHookedTransport` take `trusted_origins` as a required keyword, so a hand-built transport
+  cannot silently skip the guard (`None` is an explicit opt-out), and default to the bounds
+  below. The clients raise `ValueError` at construction when `base_url` has no http(s) origin.
 - `name` must match `[A-Za-z0-9][A-Za-z0-9_-]{0,63}`. `base_path` and `paths` values must be
   absolute paths (single leading `/`, RFC 3986 path characters, at most 1024 characters, no `?`,
   `#`, backslash, dot-segments or encoded `.`, `/`, `\`, NUL), or an absolute http(s) URL without
   userinfo, query or fragment under the same path rules (kept so split-origin deployments still
   work; the origin guards judge it). Violations raise `ManifestError` when the manifest loads.
-- `keepalive_seconds` is clamped to 1-60 s, default 15 s for anything missing, non-numeric,
-  non-finite or non-positive. 15 s is the interval the WHATWG server-sent events specification
+- `keepalive_seconds` is clamped to 1-60 s (also on the parsed `Events`), default 15 s for anything
+  missing, non-numeric, non-finite, too large for a float or non-positive. 15 s is the interval the WHATWG server-sent events specification
   suggests for comment keep-alives; 60 s equals common proxy read timeouts (nginx
   `proxy_read_timeout` defaults to 60 s). The dead-stream timeout stays three intervals, so at
   most 180 s.
@@ -42,12 +46,14 @@ cache keys (token hash, filter values) were logged.
   `max_response_bytes` (default 16 MiB, counted on the decoded body so a compression bomb counts
   inflated; large enough for a page of `max_limit` rows or a stats response, small enough that a
   1024-entry memory cache is not unbounded in practice). `None` disables either. Event streams
-  (`Accept: text/event-stream`) are exempt. The async transport also bounds the wait for headers
+  are exempt when the request sent `Accept: text/event-stream` and the response is
+  `Content-Type: text/event-stream`; `HEAD`, `204` and `304` may declare any `Content-Length`.
+  The deadline starts per transport attempt (the `401` refresh-and-retry gets its own). The async transport also bounds the wait for headers
   with `asyncio.timeout`; the sync transport checks the deadline when the headers arrive and per
   chunk, because a blocked socket read cannot be interrupted, so it overruns by up to one phase
   `timeout`.
-- `iter_all(max_pages=1000)` stops with `PaginationLimitExceededError`, also when a page holds
-  more rows than `limit`.
+- `iter_all(max_pages=1000)` stops with `PaginationLimitExceededError` when `max_pages` full pages
+  are followed by another non-empty page, and when a page holds more rows than `limit`.
 - Exceptions keep a redacted copy of the response: headers whose names match authorization,
   cookie, token, secret, api key, csrf/xsrf, session or credential are replaced by `[redacted]`
   (OWASP Logging Cheat Sheet: never log credentials or session identifiers), the request URL

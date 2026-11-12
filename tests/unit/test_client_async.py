@@ -237,7 +237,7 @@ async def test_transport_close_and_client_lifecycle() -> None:
             """On response."""
             return response
 
-    transport = AsyncHookedTransport(Inner(), [Plain()])
+    transport = AsyncHookedTransport(Inner(), [Plain()], trusted_origins=None)
     assert (await transport.handle_async_request(httpx2.Request("GET", BASE))).status_code == 200
     await transport.aclose()
     assert closed == [True]

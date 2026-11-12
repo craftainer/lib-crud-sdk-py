@@ -73,13 +73,17 @@ layer, whose `clear`, `cached_etag` and `events_active` stay available.
   `AsyncCrudClient`; exposed as `client.allowed_origins`). The explicit `manifest_url` you pass
   yourself is exempt from this join check, but not from the credential guard below.
 - **Credentials go only to trusted origins.** A request that carries an `Authorization` header
-  (the provider's token or a header configured on the client) is refused with
+  (the provider's token or a header configured on the client), or any header whose name contains
+  cookie, token, secret, api key, csrf/xsrf, session or credential, is refused with
   `OriginNotAllowedError` (a `ClientError`, raised before anything is sent) unless its origin is
   `base_url`'s or one of `allowed_origins`, as browsers withhold credentials from other origins.
   The comparison is exact on scheme, host and port (default ports filled in, so `:443` equals
   `https`). It runs on the request as sent, so it also covers `client.http.get(url)`, a hook that
   rewrote the URL and an explicit `manifest_url` on another origin (add that origin to
-  `allowed_origins`). Anonymous requests are never refused. See ADR 0005.
+  `allowed_origins`). Requests without such a header are never refused. A `base_url` that is not an
+  http(s) URL with a host raises `ValueError` from the constructor. `HookedTransport` and
+  `AsyncHookedTransport` take a required keyword `trusted_origins` (`origin.trusted_origins(...)`,
+  or `None` to opt out explicitly) and default to the bounds below. See ADR 0005.
 - **Manifest shape.** `name` must be 1-64 characters of `A-Za-z0-9_-` starting with a letter or
   digit (it is part of every cache key). `base_path` and every `paths` value must be an absolute
   path of at most 1024 characters: a single leading `/`, RFC 3986 path characters only, no `?`,
@@ -91,13 +95,19 @@ layer, whose `clear`, `cached_etag` and `events_active` stay available.
   chunk), every response is bounded by `total_timeout` (default 30 s, from sending to the last
   body byte; `DeadlineExceededError`) and `max_response_bytes` (default 16 MiB of *decoded* body,
   so a compression bomb counts at its inflated size; `ResponseTooLargeError`). Pass `None` to
-  switch either off. Event streams are exempt (httpx2 bounds each SSE event itself). The async
+  switch either off. Event streams are exempt when the request asks for `text/event-stream` and the response is one
+  (httpx2 bounds each SSE event itself); `HEAD`, `204` and `304` responses may declare any
+  `Content-Length`. The deadline is per transport attempt: the refresh-and-retry after a `401` gets
+  its own. The async
   client also cuts the wait for response headers at the deadline; the sync client cannot
   interrupt a blocked read, so it can overrun by up to one `timeout` phase.
   `iter_all(..., max_pages=1000)` raises `PaginationLimitExceededError` instead of looping when
-  1000 full pages did not reach the end, or when a page holds more rows than `limit`.
+  1000 full pages are followed by another non-empty page (one extra request), or when a page holds
+  more rows than `limit`.
   Event-stream `keepalive_seconds` from the manifest is clamped to 1-60 s (15 s when missing,
-  non-numeric, non-finite or not positive); the dead-stream timeout is three intervals.
+  non-numeric, non-finite, huge or not positive), also on `Events.keepalive_seconds`; the
+  dead-stream timeout is three intervals, so a server that stays silent for more than 180 s is
+  reconnected.
 - **Errors and logs.** `ProblemError.response` and `ResponseError.response` are redacted copies:
   the status, body and headers are kept, but `Authorization`, `Cookie`, `Set-Cookie` and any
   header whose name contains token, secret, api key, csrf/xsrf, session or credential are
@@ -193,7 +203,9 @@ These calls, accepted before, now fail. Each is a deliberate fail-closed change 
 
 | If you... | Now | Do |
 | --- | --- | --- |
-| send a token to an origin other than `base_url` (an explicit `manifest_url`, `client.http.get(other_url)`, a hook rewriting URLs) | `OriginNotAllowedError` | add the origin to `allowed_origins` |
+| send a token or a cookie/API-key header to an origin other than `base_url` (an explicit `manifest_url`, `client.http.get(other_url)`, a hook rewriting URLs) | `OriginNotAllowedError` | add the origin to `allowed_origins` |
+| pass a `base_url` without a scheme and host (`"api.example.com"`, `"localhost:8000"`) | `ValueError` from the constructor | pass `https://...` |
+| build `HookedTransport` / `AsyncHookedTransport` yourself | `TypeError` without `trusted_origins`; default bounds apply | pass `trusted_origins=` (and `bounds=None` for the old behaviour) |
 | serve a manifest with a `name`, `base_path` or `paths` value outside the shapes above (`?`, `#`, `..`, `//host/...`, relative path, odd characters in a name) | `ManifestError` when the manifest loads | fix the server manifest |
 | read responses larger than 16 MiB or slower than 30 s in total | `ResponseTooLargeError` / `DeadlineExceededError` | pass `max_response_bytes=` / `total_timeout=` (or `None`) |
 | `iter_all` over more than 1000 full pages, or a server that returns more rows than `limit` | `PaginationLimitExceededError` | pass a larger `max_pages=` / fix the server |

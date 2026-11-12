@@ -34,6 +34,7 @@ __all__ = [
     "Unauthorized",
     "UnknownResourceError",
     "ValidationFailed",
+    "is_credential_header",
     "problem_from_response",
     "redact_headers",
     "redact_response",
@@ -50,7 +51,12 @@ REDACTED = "[redacted]"
 _SENSITIVE_HEADER = re.compile(
     r"authorization|cookie|token|secret|api[-_]?key|csrf|xsrf|session|credential", re.IGNORECASE
 )
-_FRAMING_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+FRAMING_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def is_credential_header(name: str) -> bool:
+    """Whether a header name carries a credential (authorization, cookie, token, key, session)."""
+    return _SENSITIVE_HEADER.search(name) is not None
 
 
 def _clip(text: str, limit: int = MAX_MESSAGE_CHARS) -> str:
@@ -74,7 +80,7 @@ def redact_headers(headers: Mapping[str, str] | httpx2.Headers) -> httpx2.Header
     (case-insensitive) are redacted, repeated headers included.
     """
     items = headers.multi_items() if isinstance(headers, httpx2.Headers) else list(headers.items())
-    return httpx2.Headers([(k, REDACTED if _SENSITIVE_HEADER.search(k) else v) for k, v in items])
+    return httpx2.Headers([(k, REDACTED if is_credential_header(k) else v) for k, v in items])
 
 
 def redact_response(response: httpx2.Response) -> httpx2.Response:
@@ -91,7 +97,7 @@ def redact_response(response: httpx2.Response) -> httpx2.Response:
         content = b""
     headers = [
         (k, v) for k, v in redact_headers(response.headers).multi_items()
-        if k.lower() not in _FRAMING_HEADERS
+        if k.lower() not in FRAMING_HEADERS
     ]  # fmt: skip
     try:
         request: httpx2.Request | None = response.request
