@@ -98,9 +98,10 @@ def test_the_error_names_the_origin_without_path_or_query() -> None:
     """The message carries the origin only."""
     with _client([]) as client, pytest.raises(OriginNotAllowedError) as info:
         client.http.get(f"{EVIL}/secret/path?token=1")
-    assert "https://evil.example" in str(info.value)
-    assert "secret" not in str(info.value)
-    assert "token=1" not in str(info.value)
+    assert str(info.value) == (
+        "refusing to send credentials to https://evil.example, which is not the base_url origin "
+        "or listed in allowed_origins"
+    )
 
 
 @pytest.mark.asyncio
