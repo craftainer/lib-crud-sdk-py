@@ -24,6 +24,7 @@ import httpx2
 
 from craftainer_crud_sdk.cache.layer import AsyncCacheLayer, CacheLayer
 from craftainer_crud_sdk.interfaces import CrudEvent
+from craftainer_crud_sdk.keepalive import clamp_keepalive
 
 __all__ = [
     "AsyncEventSubscriber",
@@ -80,8 +81,7 @@ class _Stream:
         self.label = events.get("resource")
         self.resume_param = str(events.get("resume_param") or "subscriber_id")
         self.persistent = events.get("replay") == "persistent"
-        keepalive = events.get("keepalive_seconds")
-        self.keepalive = float(keepalive) if isinstance(keepalive, int | float) else 15.0
+        self.keepalive = clamp_keepalive(events.get("keepalive_seconds"))
         self.jitter = jitter
         self.subscriber_id: str | None = None
         self.connections = 0

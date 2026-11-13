@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import re
 from collections.abc import Mapping
 from http import HTTPStatus
 from typing import Any
@@ -15,24 +16,100 @@ __all__ = [
     "ClientError",
     "ConnectionFailed",
     "CrudError",
+    "DeadlineExceededError",
     "Forbidden",
     "InsecureTransportError",
     "InvalidQueryError",
     "Locked",
     "ManifestError",
     "NotFound",
+    "OriginNotAllowedError",
+    "PaginationLimitExceededError",
     "PreconditionFailed",
     "ProblemError",
     "RateLimited",
     "ResponseError",
+    "ResponseTooLargeError",
     "ServerError",
     "Unauthorized",
     "UnknownResourceError",
     "ValidationFailed",
+    "is_credential_header",
     "problem_from_response",
+    "redact_headers",
+    "redact_response",
+    "safe_url",
 ]
 
 _NO_TYPE = "about:blank"
+
+MAX_MESSAGE_CHARS = 300
+"""Longest server-supplied text (title, detail, field message) copied into an exception message."""
+
+REDACTED = "[redacted]"
+
+_SENSITIVE_HEADER = re.compile(
+    r"authorization|cookie|token|secret|api[-_]?key|csrf|xsrf|session|credential", re.IGNORECASE
+)
+FRAMING_HEADERS = frozenset({"content-encoding", "content-length", "transfer-encoding"})
+
+
+def is_credential_header(name: str) -> bool:
+    """Whether a header name carries a credential (authorization, cookie, token, key, session)."""
+    return _SENSITIVE_HEADER.search(name) is not None
+
+
+def _clip(text: str, limit: int = MAX_MESSAGE_CHARS) -> str:
+    """`text` cut to `limit` characters (an ellipsis marks the cut)."""
+    return text if len(text) <= limit else text[:limit] + "..."
+
+
+def safe_url(url: str | httpx2.URL) -> str:
+    """`url` without userinfo, query and fragment (they carry credentials and filter values)."""
+    try:
+        parsed = httpx2.URL(url) if isinstance(url, str) else url
+        return str(parsed.copy_with(username=None, password=None, query=None, fragment=None))
+    except httpx2.InvalidURL, ValueError:
+        return "<unparseable url>"
+
+
+def redact_headers(headers: Mapping[str, str] | httpx2.Headers) -> httpx2.Headers:
+    """A copy of `headers` with the value of every credential-bearing header replaced.
+
+    Names matching authorization, cookie, token, secret, api key, csrf/xsrf, session or credential
+    (case-insensitive) are redacted, repeated headers included.
+    """
+    items = headers.multi_items() if isinstance(headers, httpx2.Headers) else list(headers.items())
+    return httpx2.Headers([(k, REDACTED if is_credential_header(k) else v) for k, v in items])
+
+
+def redact_response(response: httpx2.Response) -> httpx2.Response:
+    """A copy of `response` that is safe to keep on an exception.
+
+    The original keeps `request.headers` (so the ``Authorization`` token) and the request URL's
+    query; an error reporter that serialises exception attributes would ship them. (Frame locals
+    of the SDK's own frames are outside what this can protect; `elapsed` is not copied.) The
+    copy keeps the status, the (redacted) headers, the body and the request method and URL
+    without userinfo, query or fragment; the request headers are redacted and its body dropped.
+    """
+    try:
+        content = response.content
+    except httpx2.ResponseNotRead:
+        content = b""
+    headers = [
+        (k, v) for k, v in redact_headers(response.headers).multi_items()
+        if k.lower() not in FRAMING_HEADERS
+    ]  # fmt: skip
+    try:
+        request: httpx2.Request | None = response.request
+    except RuntimeError:  # a response built without a request
+        request = None
+    copy = httpx2.Response(response.status_code, headers=headers, content=content)
+    if request is not None:
+        copy.request = httpx2.Request(
+            request.method, safe_url(request.url), headers=redact_headers(request.headers)
+        )
+    return copy
 
 
 class CrudError(Exception):
@@ -57,6 +134,12 @@ class InsecureTransportError(ClientError):
     """
 
 
+class OriginNotAllowedError(ClientError):
+    """A request carrying an ``Authorization`` header was about to go to an origin outside
+    `base_url` and `allowed_origins`. Nothing was sent. List the origin in ``allowed_origins``.
+    """
+
+
 class ManifestError(ClientError):
     """The discovery document or the manifest is missing, unusable or of an unknown version."""
 
@@ -77,9 +160,21 @@ class ResponseError(CrudError):
 
     def __init__(self, message: str, response: httpx2.Response | None = None) -> None:
         """Keep the response next to the message."""
-        super().__init__(message)
-        self.response = response
+        super().__init__(_clip(message, 4 * MAX_MESSAGE_CHARS))
+        self.response = None if response is None else redact_response(response)
         self.status = None if response is None else response.status_code
+
+
+class ResponseTooLargeError(ResponseError):
+    """A response body is larger than the client's `max_response_bytes`; reading stopped."""
+
+
+class DeadlineExceededError(CrudError):
+    """A request did not finish within the client's `total_timeout`; reading stopped."""
+
+
+class PaginationLimitExceededError(CrudError):
+    """`iter_all` reached `max_pages` (or the server ignored `limit`) before the last page."""
 
 
 class ProblemError(CrudError):
@@ -97,12 +192,13 @@ class ProblemError(CrudError):
         response: httpx2.Response | None = None,
     ) -> None:
         """Keep the members and build a readable message."""
-        message = f"{status} {title}"
+        message = f"{status} {_clip(title)}"
         if detail:
-            message += f": {detail}"
+            message += f": {_clip(detail)}"
         elif errors:
-            message += ": " + "; ".join(
-                f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in errors
+            message += ": " + _clip(
+                "; ".join(f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in errors),
+                4 * MAX_MESSAGE_CHARS,
             )
         super().__init__(message)
         self.status = status
@@ -111,8 +207,8 @@ class ProblemError(CrudError):
         self.type = type
         self.instance = instance
         self.errors = errors
-        self.headers: Mapping[str, str] = headers if headers is not None else {}
-        self.response = response
+        self.headers: Mapping[str, str] = {} if headers is None else redact_headers(headers)
+        self.response = None if response is None else redact_response(response)
 
 
 class BadRequest(ProblemError):  # noqa: N818 - name fixed by the SDK spec

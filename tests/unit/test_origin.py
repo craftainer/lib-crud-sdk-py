@@ -115,7 +115,7 @@ def _heroes(client: CrudClient) -> ResourceClient:
     return client.resource("heroes", "v2")
 
 
-@pytest.mark.parametrize("base_path", [f"{EVIL}/heroes", "//evil.example/heroes"])
+@pytest.mark.parametrize("base_path", [f"{EVIL}/heroes"])
 def test_a_foreign_base_path_never_sends_the_token(base_path: str) -> None:
     """The request is refused before anything is sent."""
     seen: list[httpx2.Request] = []
@@ -144,7 +144,7 @@ def test_allowed_origins_permit_a_split_origin_deployment() -> None:
 
 def test_a_foreign_events_url_is_rejected_by_events_url_and_enable_cache() -> None:
     """The SSE URL is joined at two sites; both refuse a foreign host."""
-    doc = _doc(events_path="//evil.example/events")
+    doc = _doc(events_path="https://evil.example/events")
     with CrudClient(BASE, transport=_transport(doc, [])) as client:
         with pytest.raises(ManifestError):
             _heroes(client).events_url()
@@ -184,7 +184,7 @@ async def test_async_client_applies_the_same_rules() -> None:
     """Async: paths, events, discovery and allowed_origins."""
     seen: list[httpx2.Request] = []
     async with AsyncCrudClient(
-        BASE, transport=_transport(_doc(base_path="//evil.example/h"), seen)
+        BASE, transport=_transport(_doc(base_path=f"{EVIL}/h"), seen)
     ) as client:
         heroes = await client.resource("heroes", "v2")
         with pytest.raises(ManifestError):
@@ -207,3 +207,15 @@ async def test_async_client_applies_the_same_rules() -> None:
     ) as client:
         heroes = await client.resource("heroes", "v2")
         assert await heroes.list() == []
+
+
+@pytest.mark.parametrize("path", ["//evil.example/heroes", "/a/../b", "/a?x=1", "/a#f", "heroes"])
+def test_a_malformed_or_protocol_relative_path_is_a_manifest_error_at_load(path: str) -> None:
+    """Fail closed when the manifest is parsed: nothing is sent past the catalog and manifest."""
+    seen: list[httpx2.Request] = []
+    with (
+        CrudClient(BASE, transport=_transport(_doc(base_path=path), seen)) as client,
+        pytest.raises(ManifestError, match="base_path"),
+    ):
+        client.manifest()
+    assert len(seen) == 2

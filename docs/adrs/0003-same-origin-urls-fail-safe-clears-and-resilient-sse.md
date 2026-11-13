@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Its trust of an explicit `manifest_url` is superseded by [0005](0005-origin-bound-credentials-validated-manifest-and-request-bounds.md).
 
 ## Context
 

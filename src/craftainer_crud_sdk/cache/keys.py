@@ -7,6 +7,8 @@ kind and subject, one prefix such as ``v1/{resource}/record/{id}/`` clears an en
 version and for every caller at once.
 """
 
+import hashlib
+
 __all__ = [
     "KINDS",
     "STATS_KINDS",
@@ -15,6 +17,7 @@ __all__ = [
     "canonical_query",
     "event_prefixes",
     "kind_prefix",
+    "log_key",
     "manifest_key",
     "prefix_parts",
     "record_prefix",
@@ -62,6 +65,17 @@ def build_key(  # noqa: PLR0913  # a key is these independent facts
     """Build the key for one cached response."""
     subject = subject_for(kind, record_id)
     return f"v1/{resource}/{kind}/{subject}/{api_version}/{scope}/{canonical_query(query)}"
+
+
+def log_key(key: str) -> str:
+    """`key` as it may appear in a log line: ``v1/{resource}/{kind}`` plus a digest of the rest.
+
+    The scope (a token hash) and the canonical query (filter values, often personal data) are
+    left out; the digest still lets one line be matched with another.
+    """
+    parts = key.split("/")
+    head = "/".join(parts[:2] if parts[1:2] == ["_manifest"] else parts[:3])  # scope follows
+    return f"{head}/#{hashlib.sha256(key.encode()).hexdigest()[:12]}"
 
 
 def manifest_key(scope: str) -> str:

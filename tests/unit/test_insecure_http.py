@@ -129,6 +129,7 @@ def test_send_authenticated_is_checked() -> None:
     transport = HookedTransport(
         make_transport(lambda _r: httpx2.Response(200), seen=seen),
         [],
+        trusted_origins=None,
         auth=BearerAuth(static_token("tok")),
     )
     with pytest.raises(InsecureTransportError):
@@ -150,7 +151,9 @@ def test_hook_rewriting_the_url_is_checked() -> None:
         ) -> httpx2.Response:
             return response
 
-    client, seen = _client("https://api.test", hooks=[Rewrite()])
+    client, seen = _client(
+        "https://api.test", hooks=[Rewrite()], allowed_origins=["http://elsewhere.example"]
+    )
     with pytest.raises(InsecureTransportError):
         client.manifest()
     assert seen == []
