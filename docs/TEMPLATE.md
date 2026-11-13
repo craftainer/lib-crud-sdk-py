@@ -253,6 +253,13 @@ Findings from the OWASP review (A03/A08), and what each now does:
   age check, and are not automerged.
   Digest-only updates (including the Dockerfile's base image) were never
   in the automerged group.
+  Python 3.15 is held: a `packageRules` entry (`matchDepNames: ["python"]`,
+  `allowedVersions: "<3.15"`) keeps Renovate from proposing it, because uv has
+  no 3.15 build yet, pip-audit crashes on the removed `sre_constants` and
+  pydantic-core has no cp315 wheel on arm64. `.github/renovate.json` is
+  merge tier, so the rule reaches instances through template sync. Lift it
+  (delete the rule) once uv offers 3.15 builds and pip-audit and
+  pydantic-core support 3.15.
 - **Installers are verified, not run blind.** `scripts/develop.sh` no
   longer runs vendor install scripts. `uv` and `prek` are installed from
   their release tarballs, checked against the `.sha256` file published
