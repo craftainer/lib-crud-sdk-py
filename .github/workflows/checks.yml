@@ -76,10 +76,11 @@ jobs:
           # The script's stdout is appended to $GITHUB_ENV, so a stray or
           # injected line (a newline in a value, another variable name) would
           # set arbitrary environment for later steps. Accept nothing but
-          # empty output or the single expected assignment.
+          # empty output or the single expected assignment (the value may be empty:
+          # the consuming hook falls back to minor).
           out="$(python3 -I .github/scripts/semver_release_type.py)"
-          if [ -n "$out" ] && ! [[ "$out" =~ ^SEMVER_RELEASE_TYPE=[a-z]+$ ]]; then
-            echo "::error::semver_release_type.py printed something other than SEMVER_RELEASE_TYPE=<word>" >&2
+          if [ -n "$out" ] && ! [[ "$out" =~ ^SEMVER_RELEASE_TYPE=(major|minor|patch)?$ ]]; then
+            echo "::error::semver_release_type.py printed something other than SEMVER_RELEASE_TYPE=[major|minor|patch]" >&2
             exit 1
           fi
           [ -z "$out" ] || printf '%s\n' "$out" >> "$GITHUB_ENV"

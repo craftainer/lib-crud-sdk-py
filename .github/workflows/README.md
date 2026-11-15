@@ -11,17 +11,9 @@
   does not, so the step is skipped here) and the hooks step forwards its
   `SEMVER_RELEASE_TYPE` into the container (the step appends the script's
   output to `$GITHUB_ENV` only if it is empty or exactly
-  `SEMVER_RELEASE_TYPE=<lowercase word>`, failing otherwise), so a `!`-marked PR title (or, on
+  `SEMVER_RELEASE_TYPE=` with an optional `major`, `minor` or `patch`
+  value, failing otherwise), so a `!`-marked PR title (or, on
   `main`, head commit subject) runs `cargo semver-checks` as `major`.
-- `smoke.yml` — builds the `runner` stage of the root `Dockerfile` via
-  the root `compose.yml`, starts it against the real Postgres, RustFS,
-  Redis, and Keycloak backing services, and confirms `/health/live` and
-  `/health/ready` both return 200 -- on push, on pull requests, and on
-  demand. Runs as the same two-leg `amd64`/`arm64` matrix as
-  `checks.yml` — this is the check that would actually catch an
-  arch-specific runtime break (e.g. a C-extension dependency missing an
-  arm64 wheel), since `checks.yml`'s test run uses `MODE=mock`
-  in-process fakes for some paths rather than the built image.
 - `release.yml` — manually triggered, and only from the default branch:
   the `version` job's first step fails on any other ref, and `build`,
   `release` and `publish-packages` repeat the check in their own `if:`.
@@ -94,7 +86,7 @@ e.g. to point at self-hosted runners.
 
 ## Architecture matrix
 
-`checks.yml`, `smoke.yml`, and `release.yml`'s `build` job each run as a
+`checks.yml` and `release.yml`'s `build` job each run as a
 two-leg matrix over `amd64`/`arm64`, both legs building/testing natively
 — `ubuntu-24.04-arm` is a real (non-emulated) GitHub-hosted Linux arm64
 runner, free on this public repo and billed as ordinary Actions minutes
